@@ -1,5 +1,8 @@
 from contextvars import ContextVar
+import logging
 from typing import Annotated, Any, Literal, NotRequired
+
+from elasticsearch import NotFoundError
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from typing_extensions import TypedDict
@@ -16,6 +19,8 @@ from langgraph.runtime import Runtime
 from app.config import settings
 from app.schemas import SourceInfo
 from app.services.vector_store_service import get_vector_store
+
+logger = logging.getLogger(__name__)
 
 BASE_SYSTEM_APPENDIX = (
     "你是基于文档内容的问答助手。优先使用检索到的文档内容回答；"
@@ -51,7 +56,11 @@ def _get_last_user_message(messages: list) -> str | None:
 
 def _search_relevant_docs(query: str) -> tuple[list[SourceInfo], str | None]:
     vector_store = get_vector_store()
-    results = vector_store.similarity_search_with_score(query, k=settings.retrieval_k)
+    try:
+        results = vector_store.similarity_search_with_score(query, k=settings.retrieval_k)
+    except NotFoundError:
+        logger.info("ES index %s not found, skip retrieval (upload documents first)", settings.es_index)
+        return [], None
 
     relevant: list[tuple] = [
         (doc, score) for doc, score in results if score >= settings.retrieval_score_threshold

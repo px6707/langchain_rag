@@ -1,4 +1,5 @@
 from collections.abc import AsyncIterator
+import logging
 from typing import Any
 
 from langchain.agents.middleware.pii import PIIDetectionError
@@ -19,6 +20,8 @@ from app.agent.middleware.openviking import reset_ov_request_context, set_ov_req
 from app.observability.langsmith import is_langsmith_enabled
 from app.openviking.session_service import sync_turn_to_openviking
 from app.schemas import SourceInfo
+
+logger = logging.getLogger(__name__)
 
 
 class RAGService:
@@ -109,6 +112,7 @@ class RAGService:
         config = self._agent_config(session_id, user_id, run_name=run_name)
         seen_tool_ids: set[str] = set()
         ov_token = set_ov_request_context(user_id, session_id)
+        logger.info("agent stream start: session_id=%s user_id=%s run_name=%s", session_id, user_id, run_name)
 
         try:
             async for msg, metadata in agent.astream(
@@ -126,7 +130,17 @@ class RAGService:
                         if todos:
                             yield {"type": "todos_update", "todos": todos}
         except PIIDetectionError as exc:
+            logger.warning("PII detected: session_id=%s error=%s", session_id, exc)
             yield {"type": "error", "message": f"检测到敏感信息: {exc}"}
+            return
+        except Exception as exc:
+            logger.exception(
+                "agent stream failed: session_id=%s user_id=%s error=%s",
+                session_id,
+                user_id,
+                exc,
+            )
+            yield {"type": "error", "message": f"RAG 服务错误: {exc}"}
             return
         finally:
             reset_ov_request_context(ov_token)
