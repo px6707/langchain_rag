@@ -1,0 +1,33 @@
+{
+  "math": {
+    "transport": "stdio",
+    "command": "python",
+    "args": ["./examples/mcp_math_server.py"]
+  },
+  "weather": {
+    "transport": "http",
+    "url": "https://mcp.example.com/mcp",
+    "auth": {
+      "type": "bearer",
+      "token_env": "MCP_WEATHER_TOKEN"
+    }
+  },
+  "partner": {
+    "transport": "http",
+    "url": "https://partner.example.com/mcp",
+    "auth": {
+      "type": "api_key",
+      "header": "X-API-Key",
+      "token_env": "MCP_PARTNER_API_KEY"
+    }
+  },
+  "legacy": {
+    "transport": "sse",
+    "url": "https://legacy.example.com/sse",
+    "auth": {
+      "type": "basic",
+      "user_env": "MCP_LEGACY_USER",
+      "pass_env": "MCP_LEGACY_PASS"
+    }
+  }
+}

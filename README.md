@@ -1,0 +1,96 @@
+# LangChain RAG 项目
+
+前后端分离的 RAG（检索增强生成）项目，支持文档上传、向量化存储与智能问答。
+
+## 技术栈
+
+- **前端**: Vue 3 + Element Plus + Tailwind CSS
+- **后端**: FastAPI + LangChain
+- **数据库**: PostgreSQL（元数据）+ Elasticsearch（向量存储）
+- **LLM**: OpenAI 兼容 API
+
+## 快速开始
+
+### 1. 启动基础设施
+
+```bash
+docker compose up -d
+```
+
+> PostgreSQL 映射到本机 **5433** 端口，避免与本机已安装的 PostgreSQL（5432）冲突。
+
+### 2. 配置环境变量
+
+```bash
+cp .env.example backend/.env
+# 编辑 backend/.env，填入 LLM 和 Embedding API 配置
+```
+
+### 3. 启动后端
+
+```bash
+cd backend
+python -m venv venv
+source venv/bin/activate  # Windows: venv\Scripts\activate
+pip install -r requirements.txt
+uvicorn app.main:app --reload --port 8000
+```
+
+### 4. 启动前端
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+访问 http://localhost:5173 ，使用 `.env` 中配置的管理员账号登录（默认 `admin` / `admin123`）。
+
+## 用户与权限
+
+- **登录页** `/login`：用户名 + 密码，无自助注册
+- **全站保护**：对话、文档上传等业务页需登录
+- **管理中心** `/admin/users`：管理员可增删改用户、禁用/启用、重置密码
+- **种子管理员**：首次启动且数据库无用户时，按 `ADMIN_USERNAME` / `ADMIN_PASSWORD` 自动创建
+
+## 架构说明
+
+- **Agent**: LangChain `create_agent` + `AsyncPostgresSaver` 持久化多轮对话
+- **检索**: 每轮固定检索 ES，相似度低于 `RETRIEVAL_SCORE_THRESHOLD` 时不注入上下文
+- **Tools**: 在 `backend/app/tools/` 下新增 `.py` 文件并用 `@tool` 装饰，重启后自动加载
+- **MCP**: 在 `backend/mcp_servers.json` 配置 MCP Server，启动时自动加载外部工具（见 [`backend/MCP.md`](backend/MCP.md)）
+
+### 新增 Tool
+
+在 [`backend/app/tools/`](backend/app/tools/) 创建新文件即可，例如：
+
+```python
+from langchain_core.tools import tool
+
+@tool
+def my_tool(query: str) -> str:
+    """工具描述。"""
+    return "result"
+```
+
+
+- **对话页** (`/`): 基于已上传文档的 RAG 问答
+- **上传页** (`/upload`): 上传 PDF/TXT/MD/DOCX 文件，自动解析并存储到向量数据库
+
+## API 端点
+
+| 方法 | 路径 | 说明 | 鉴权 |
+|------|------|------|------|
+| POST | `/api/auth/login` | 登录，返回 JWT | 公开 |
+| GET | `/api/auth/me` | 当前用户信息 | 需登录 |
+| GET | `/api/admin/users` | 用户列表 | 管理员 |
+| POST | `/api/admin/users` | 创建用户 | 管理员 |
+| PATCH | `/api/admin/users/{id}` | 更新用户 | 管理员 |
+| DELETE | `/api/admin/users/{id}` | 删除用户 | 管理员 |
+| POST | `/api/documents/upload` | 上传文件 | 需登录 |
+| GET | `/api/documents` | 文档列表 | 需登录 |
+| DELETE | `/api/documents/{id}` | 删除文档 | 需登录 |
+| POST | `/api/chat` | RAG 对话 | 需登录 |
+| GET | `/api/chat/history` | 对话历史 | 需登录 |
+| GET | `/api/chat/tools` | 已注册工具列表（本地 + MCP） | 需登录 |
+| GET | `/health` | 健康检查（含 MCP 状态） | 公开 |

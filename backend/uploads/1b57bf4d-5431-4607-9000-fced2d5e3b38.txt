@@ -1,0 +1,9 @@
+LangChain RAG 测试文档
+
+这是一个用于测试 RAG 系统的示例文档。
+
+LangChain 是一个用于开发由语言模型驱动的应用程序的框架。
+它提供了模块化的组件，可以轻松构建 RAG 应用。
+
+RAG（Retrieval-Augmented Generation）是一种结合检索和生成的技术。
+它先从向量数据库中检索相关文档，然后将这些文档作为上下文提供给 LLM 生成回答。

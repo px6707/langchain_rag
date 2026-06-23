@@ -1,0 +1,20 @@
+{
+  "embedding": {
+    "dense": {
+      "api_base": "https://api.openai.com/v1",
+      "api_key": "<your-embedding-api-key>",
+      "provider": "openai",
+      "dimension": 1536,
+      "model": "text-embedding-3-small"
+    }
+  },
+  "vlm": {
+    "api_base": "https://api.openai.com/v1",
+    "api_key": "<your-llm-api-key>",
+    "provider": "openai",
+    "model": "gpt-4o-mini"
+  },
+  "storage": {
+    "path": "./openviking_data"
+  }
+}
