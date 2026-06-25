@@ -55,6 +55,7 @@ export interface DocumentListResponse {
 export interface SourceInfo {
   filename: string
   content: string
+  score?: number | null
 }
 
 export interface ChatResponse {

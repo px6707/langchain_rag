@@ -92,6 +92,9 @@
                   class="text-xs bg-gray-50 rounded p-2 text-gray-600"
                 >
                   <span class="font-medium text-blue-600">{{ source.filename }}</span>
+                  <span v-if="source.score != null" class="ml-2 text-gray-400">
+                    ({{ source.score.toFixed(3) }})
+                  </span>
                   <p class="mt-1 line-clamp-2">{{ source.content }}</p>
                 </div>
               </div>

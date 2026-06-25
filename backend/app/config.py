@@ -22,8 +22,16 @@ class Settings(BaseSettings):
 
     chunk_size: int = 500
     chunk_overlap: int = 50
-    retrieval_k: int = 4
+    retrieval_k: int = 4  # legacy; final k uses rerank_top_n
     retrieval_score_threshold: float = 0.7
+    retrieval_hybrid_enabled: bool = True
+    retrieval_rrf_enabled: bool = True
+    retrieval_fetch_k: int = 20
+    rerank_enabled: bool = True
+    rerank_api_base: str = ""
+    rerank_api_key: str = ""
+    rerank_model: str = ""
+    rerank_top_n: int = 4
 
     summarization_trigger_messages: int = 30
     summarization_keep_messages: int = 15

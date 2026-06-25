@@ -56,7 +56,7 @@ npm run dev
 ## 架构说明
 
 - **Agent**: LangChain `create_agent` + `AsyncPostgresSaver` 持久化多轮对话
-- **检索**: 每轮固定检索 ES，相似度低于 `RETRIEVAL_SCORE_THRESHOLD` 时不注入上下文
+- **检索**: ES 混合检索（BM25 + 向量 RRF）+ 云 rerank 精排；详见 [`backend/RETRIEVAL.md`](backend/RETRIEVAL.md)
 - **Tools**: 在 `backend/app/tools/` 下新增 `.py` 文件并用 `@tool` 装饰，重启后自动加载
 - **MCP**: 在 `backend/mcp_servers.json` 配置 MCP Server，启动时自动加载外部工具（见 [`backend/MCP.md`](backend/MCP.md)）
 

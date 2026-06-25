@@ -104,6 +104,7 @@ class ChatInterruptResponse(BaseModel):
 class SourceInfo(BaseModel):
     filename: str
     content: str
+    score: float | None = None
 
 
 class ToolCallInfo(BaseModel):

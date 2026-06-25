@@ -1,3 +1,4 @@
+import asyncio
 from contextvars import ContextVar
 from typing import Annotated, Any, Literal, NotRequired
 
@@ -13,9 +14,7 @@ from langchain.agents.middleware.types import (
 )
 from langgraph.runtime import Runtime
 
-from app.config import settings
-from app.schemas import SourceInfo
-from app.services.vector_store_service import get_vector_store
+from app.services.retrieval_service import search_relevant_docs
 
 BASE_SYSTEM_APPENDIX = (
     "你是基于文档内容的问答助手。优先使用检索到的文档内容回答；"
@@ -49,27 +48,6 @@ def _get_last_user_message(messages: list) -> str | None:
     return None
 
 
-def _search_relevant_docs(query: str) -> tuple[list[SourceInfo], str | None]:
-    vector_store = get_vector_store()
-    results = vector_store.similarity_search_with_score(query, k=settings.retrieval_k)
-
-    relevant: list[tuple] = [
-        (doc, score) for doc, score in results if score >= settings.retrieval_score_threshold
-    ]
-    if not relevant:
-        return [], None
-
-    sources: list[SourceInfo] = []
-    context_parts: list[str] = []
-    for doc, score in relevant:
-        filename = doc.metadata.get("filename", "unknown")
-        sources.append(SourceInfo(filename=filename, content=doc.page_content[:200]))
-        context_parts.append(f"[来源: {filename} | 相关度: {score:.3f}]\n{doc.page_content}")
-
-    context = "\n\n---\n\n".join(context_parts)
-    return sources, context
-
-
 class RetrievalMiddleware(AgentMiddleware[AgentState[Any], None, Any]):
     state_schema = RAGAgentState
     tools = ()
@@ -80,13 +58,13 @@ class RetrievalMiddleware(AgentMiddleware[AgentState[Any], None, Any]):
         handler,
     ) -> ModelResponse:
         query = _get_last_user_message(request.messages)
-        sources: list[SourceInfo] = []
+        sources = []
         context: str | None = None
 
         if query:
-            sources, context = _search_relevant_docs(query)
+            sources, context = await asyncio.to_thread(search_relevant_docs, query)
 
-        _pending_sources.set([s.model_dump() for s in sources] if sources else None)
+        _pending_sources.set([s.model_dump(exclude_none=True) for s in sources] if sources else None)
 
         if context:
             base = request.system_message.content if request.system_message else BASE_SYSTEM_APPENDIX
