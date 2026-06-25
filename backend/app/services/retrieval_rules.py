@@ -33,6 +33,14 @@ def rule_precheck(query: str) -> RetrievalPlan | None:
     return None
 
 
+def _force_retrieve_update(reason: str) -> dict:
+    return {
+        "action": "retrieve",
+        "strategy": "none",
+        "reason": reason,
+    }
+
+
 def rule_postcheck_retrieve(query: str, plan: RetrievalPlan) -> RetrievalPlan:
     text = query.strip()
     if plan.action != "skip":
@@ -40,32 +48,17 @@ def rule_postcheck_retrieve(query: str, plan: RetrievalPlan) -> RetrievalPlan:
 
     if has_doc_intent(text):
         return plan.model_copy(
-            update={
-                "action": "retrieve",
-                "strategy": "none",
-                "standalone_query": text,
-                "reason": "规则 postcheck：文档意图强制 retrieve",
-            }
+            update=_force_retrieve_update("规则 postcheck：文档意图强制 retrieve")
         )
 
     if len(text) > 15 and ("?" in text or "？" in text):
         return plan.model_copy(
-            update={
-                "action": "retrieve",
-                "strategy": "none",
-                "standalone_query": text,
-                "reason": "规则 postcheck：长问句强制 retrieve",
-            }
+            update=_force_retrieve_update("规则 postcheck：长问句强制 retrieve")
         )
 
     if has_anaphora(text):
         return plan.model_copy(
-            update={
-                "action": "retrieve",
-                "strategy": "none",
-                "standalone_query": text,
-                "reason": "规则 postcheck：指代追问强制 retrieve",
-            }
+            update=_force_retrieve_update("规则 postcheck：指代追问强制 retrieve")
         )
 
     return plan

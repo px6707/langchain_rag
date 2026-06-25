@@ -15,8 +15,9 @@ from app.services.retrieval_router import (
 from app.services.retrieval_validator import normalize_plan
 
 
-def _mock_router_llm(*, rewrite=None, strategy=None):
+def _mock_router_llm(*, rewrite=None, strategy=None, strategy_sequence=None):
     llm = MagicMock()
+    strategy_calls = {"count": 0}
 
     def structured_output(schema):
         mock = MagicMock()
@@ -28,13 +29,18 @@ def _mock_router_llm(*, rewrite=None, strategy=None):
                 "reason": "test",
             }
         else:
-            mock.invoke.return_value = strategy or {
-                "action": "retrieve",
-                "strategy": "none",
-                "extra_queries": [],
-                "hyde_document": None,
-                "reason": "test",
-            }
+            if strategy_sequence is not None:
+                idx = min(strategy_calls["count"], len(strategy_sequence) - 1)
+                mock.invoke.return_value = strategy_sequence[idx]
+                strategy_calls["count"] += 1
+            else:
+                mock.invoke.return_value = strategy or {
+                    "action": "retrieve",
+                    "strategy": "none",
+                    "extra_queries": [],
+                    "hyde_document": None,
+                    "reason": "test",
+                }
         return mock
 
     llm.with_structured_output.side_effect = structured_output
@@ -71,17 +77,88 @@ def test_resolve_standalone_calls_llm_on_multi_turn():
 
 def test_plan_retrieval_postcheck_overrides_skip():
     llm = _mock_router_llm(
+        rewrite={
+            "standalone_query": "文档合同条款说明",
+            "resolved_entities": [],
+            "confidence": "high",
+            "reason": "rewrite",
+        },
         strategy={
             "action": "skip",
             "strategy": "none",
             "extra_queries": [],
             "hyde_document": None,
             "reason": "llm",
-        }
+        },
     )
+    messages = [
+        HumanMessage(content="请帮我看合同"),
+        AIMessage(content="好的"),
+        HumanMessage(content="文档里的合同条款是什么？"),
+    ]
     with patch.object(settings, "retrieval_routing_enabled", True):
-        plan = plan_retrieval([HumanMessage(content="文档里的合同条款是什么？")], llm=llm)
+        plan = plan_retrieval(messages, llm=llm)
     assert plan.action == "retrieve"
+    assert plan.standalone_query == "文档合同条款说明"
+    assert plan.standalone_query != "文档里的合同条款是什么？"
+
+
+def test_plan_retrieval_postcheck_reruns_strategy_on_skip_upgrade():
+    skip_strategy = {
+        "action": "skip",
+        "strategy": "none",
+        "extra_queries": [],
+        "hyde_document": None,
+        "reason": "llm skip",
+    }
+    llm = _mock_router_llm(
+        rewrite={
+            "standalone_query": "合同A的限制是什么",
+            "resolved_entities": ["合同A"],
+            "confidence": "high",
+            "reason": "rewrite",
+        },
+        strategy_sequence=[skip_strategy, skip_strategy],
+    )
+    messages = [
+        HumanMessage(content="合同A的内容"),
+        AIMessage(content="合同A规定了违约金"),
+        HumanMessage(content="那它的限制是什么？"),
+    ]
+    with patch.object(settings, "retrieval_routing_enabled", True):
+        plan = plan_retrieval(messages, llm=llm)
+    assert plan.action == "retrieve"
+    assert plan.standalone_query == "合同A的限制是什么"
+    assert plan.standalone_query != "那它的限制是什么？"
+    assert llm.with_structured_output.call_count == 3
+
+
+def test_plan_retrieval_postcheck_pins_retrieve_when_strategy_skips_again():
+    skip_strategy = {
+        "action": "skip",
+        "strategy": "none",
+        "extra_queries": [],
+        "hyde_document": None,
+        "reason": "llm skip again",
+    }
+    llm = _mock_router_llm(
+        rewrite={
+            "standalone_query": "合同A的限制是什么",
+            "resolved_entities": ["合同A"],
+            "confidence": "high",
+            "reason": "rewrite",
+        },
+        strategy_sequence=[skip_strategy, skip_strategy],
+    )
+    messages = [
+        HumanMessage(content="合同A的内容"),
+        AIMessage(content="合同A规定了违约金"),
+        HumanMessage(content="那它的限制是什么？"),
+    ]
+    with patch.object(settings, "retrieval_routing_enabled", True):
+        plan = plan_retrieval(messages, llm=llm)
+    assert plan.action == "retrieve"
+    assert "规则 postcheck" in plan.reason
 
 
 def test_plan_retrieval_two_step():

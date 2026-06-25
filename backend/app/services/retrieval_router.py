@@ -338,12 +338,14 @@ def plan_retrieval(
         return RetrievalPlan(action="skip", reason="用户消息为空")
 
     original = query.strip()
+    precheck_postcheck_reason: str | None = None
     ruled = rule_precheck(original)
     if ruled is not None and ruled.action == "skip":
         ruled = rule_postcheck_retrieve(original, ruled)
         if ruled.action == "skip":
             logger.info("Rule precheck+postcheck skip: %s", ruled.reason)
             return ruled
+        precheck_postcheck_reason = ruled.reason
 
     if not settings.retrieval_routing_enabled:
         return _fallback_plan(original, reason="检索路由已关闭")
@@ -365,7 +367,22 @@ def plan_retrieval(
         logger.exception("Retrieval routing failed; falling back to direct retrieval")
         return _fallback_plan(original, reason="路由异常，fail-open 直接检索")
 
+    was_skip = plan.action == "skip"
     plan = rule_postcheck_retrieve(original, plan)
+
+    if was_skip and plan.action == "retrieve":
+        postcheck_reason = plan.reason
+        standalone = plan.standalone_query.strip() or original
+        logger.info("Postcheck upgraded skip->retrieve; re-running strategy")
+        strategy = plan_strategy(messages, standalone, llm=model)
+        plan = RetrievalPlan(
+            action="retrieve",
+            strategy=strategy.strategy,
+            standalone_query=standalone,
+            extra_queries=strategy.extra_queries,
+            hyde_document=strategy.hyde_document,
+            reason=f"{postcheck_reason}; {strategy.reason}",
+        )
 
     if plan.action == "skip":
         logger.info("Retrieval skipped: %s", plan.reason)
@@ -373,6 +390,11 @@ def plan_retrieval(
 
     if not plan.standalone_query.strip():
         plan.standalone_query = original
+
+    if precheck_postcheck_reason:
+        plan = plan.model_copy(
+            update={"reason": f"{precheck_postcheck_reason}; {plan.reason}"}
+        )
 
     plan = normalize_plan(plan)
     logger.info(

@@ -18,6 +18,18 @@ def test_rule_postcheck_forces_retrieve_on_anaphora():
     skip_plan = RetrievalPlan(action="skip", reason="llm skip")
     plan = rule_postcheck_retrieve("那它的限制是什么？", skip_plan)
     assert plan.action == "retrieve"
+    assert plan.strategy == "none"
+
+
+def test_rule_postcheck_preserves_standalone_query():
+    skip_plan = RetrievalPlan(
+        action="skip",
+        reason="llm skip",
+        standalone_query="合同A的限制是什么",
+    )
+    plan = rule_postcheck_retrieve("那它的限制是什么？", skip_plan)
+    assert plan.action == "retrieve"
+    assert plan.standalone_query == "合同A的限制是什么"
 
 
 def test_rule_postcheck_keeps_skip_for_chitchat():
