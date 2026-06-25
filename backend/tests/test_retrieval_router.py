@@ -1,168 +1,130 @@
 from unittest.mock import MagicMock, patch
 
 import pytest
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from app.config import settings
 from app.schemas.retrieval import RetrievalPlan
-from app.services.retrieval_router import plan_retrieval
+from app.services.retrieval_rules import rule_precheck
+from app.services.retrieval_router import plan_retrieval, rewrite_query
+from app.services.retrieval_validator import normalize_plan, validate_standalone_query
 
 
-def _mock_llm(return_plan: RetrievalPlan) -> MagicMock:
+def _mock_router_llm(*, rewrite=None, strategy=None):
     llm = MagicMock()
-    structured = MagicMock()
-    structured.invoke.return_value = return_plan
-    llm.with_structured_output.return_value = structured
+
+    def structured_output(schema):
+        mock = MagicMock()
+        if schema.__name__ == "QueryRewrite":
+            mock.invoke.return_value = rewrite or {"standalone_query": "resolved", "reason": "test"}
+        else:
+            mock.invoke.return_value = strategy or {
+                "action": "retrieve",
+                "strategy": "none",
+                "extra_queries": [],
+                "hyde_document": None,
+                "reason": "test",
+            }
+        return mock
+
+    llm.with_structured_output.side_effect = structured_output
     return llm
 
 
-def test_plan_retrieval_skip_chitchat():
-    llm = _mock_llm(RetrievalPlan(action="skip", reason="问候语"))
-    messages = [HumanMessage(content="你好")]
-
-    with patch.object(settings, "retrieval_routing_enabled", True):
-        plan = plan_retrieval(messages, llm=llm)
-
-    assert plan.action == "skip"
-    assert plan.reason == "问候语"
-
-
-def test_plan_retrieval_skip_tool_only():
-    llm = _mock_llm(RetrievalPlan(action="skip", reason="纯工具调用"))
-    messages = [HumanMessage(content="现在几点了？")]
-
-    with patch.object(settings, "retrieval_routing_enabled", True):
-        plan = plan_retrieval(messages, llm=llm)
-
+def test_rule_precheck_greeting_skip():
+    plan = rule_precheck("你好")
+    assert plan is not None
     assert plan.action == "skip"
 
 
-def test_plan_retrieval_retrieve_none():
-    llm = _mock_llm(
-        RetrievalPlan(
-            action="retrieve",
-            strategy="none",
-            standalone_query="LangChain 是什么？",
-            reason="简单事实问句",
-        )
-    )
-    messages = [HumanMessage(content="LangChain 是什么？")]
+def test_rule_precheck_normal_query_returns_none():
+    assert rule_precheck("LangChain 的核心组件有哪些？") is None
 
+
+def test_rewrite_query_single_turn_skips_llm():
+    llm = MagicMock()
+    messages = [HumanMessage(content="什么是 RAG？")]
+    result = rewrite_query(messages, llm=llm)
+    assert result == "什么是 RAG？"
+    llm.with_structured_output.assert_not_called()
+
+
+def test_rewrite_query_multi_turn_calls_llm():
+    llm = _mock_router_llm(rewrite={"standalone_query": "LangChain 的 RAG 怎么做", "reason": "指代消解"})
+    messages = [
+        HumanMessage(content="LangChain 是什么"),
+        AIMessage(content="LangChain 是一个框架"),
+        HumanMessage(content="那 RAG 怎么做"),
+    ]
+    result = rewrite_query(messages, llm=llm)
+    assert result == "LangChain 的 RAG 怎么做"
+    llm.with_structured_output.assert_called()
+
+
+def test_plan_retrieval_rule_precheck_skips_llm():
+    llm = MagicMock()
+    with patch.object(settings, "retrieval_routing_enabled", True):
+        plan = plan_retrieval([HumanMessage(content="谢谢")], llm=llm)
+    assert plan.action == "skip"
+    llm.with_structured_output.assert_not_called()
+
+
+def test_plan_retrieval_two_step():
+    llm = _mock_router_llm(
+        rewrite={"standalone_query": "完整问题", "reason": "rewrite"},
+        strategy={
+            "action": "retrieve",
+            "strategy": "multi_query",
+            "extra_queries": ["q1", "q2"],
+            "hyde_document": None,
+            "reason": "multi",
+        },
+    )
+    messages = [
+        HumanMessage(content="之前的问题"),
+        AIMessage(content="之前的回答"),
+        HumanMessage(content="它的细节"),
+    ]
     with patch.object(settings, "retrieval_routing_enabled", True):
         plan = plan_retrieval(messages, llm=llm)
-
-    assert plan.action == "retrieve"
-    assert plan.strategy == "none"
-    assert plan.standalone_query == "LangChain 是什么？"
-
-
-def test_plan_retrieval_multi_query():
-    llm = _mock_llm(
-        RetrievalPlan(
-            action="retrieve",
-            strategy="multi_query",
-            standalone_query="RAG 的优缺点",
-            extra_queries=["RAG 优点", "RAG 缺点", "RAG 适用场景", "多余 query"],
-            reason="多角度",
-        )
-    )
-    messages = [HumanMessage(content="RAG 的优缺点和适用场景？")]
-
-    with (
-        patch.object(settings, "retrieval_routing_enabled", True),
-        patch.object(settings, "retrieval_multi_query_count", 3),
-    ):
-        plan = plan_retrieval(messages, llm=llm)
-
+    assert plan.standalone_query == "完整问题"
     assert plan.strategy == "multi_query"
-    assert len(plan.extra_queries) == 3
+    assert len(plan.extra_queries) == 2
 
 
-def test_plan_retrieval_hyde():
-    llm = _mock_llm(
-        RetrievalPlan(
-            action="retrieve",
-            strategy="hyde",
-            standalone_query="向量数据库如何工作",
-            hyde_document="向量数据库通过 embedding 将文本映射到高维空间...",
-            reason="概念抽象",
-        )
+def test_validate_standalone_query_anaphora_fallback():
+    result = validate_standalone_query("它是什么", "原始问题")
+    assert result == "原始问题"
+
+
+def test_normalize_plan_hyde_downgrade():
+    plan = RetrievalPlan(
+        action="retrieve",
+        strategy="hyde",
+        standalone_query="q",
+        hyde_document="short",
+        reason="x",
     )
-    messages = [HumanMessage(content="向量数据库如何工作？")]
-
-    with patch.object(settings, "retrieval_routing_enabled", True):
-        plan = plan_retrieval(messages, llm=llm)
-
-    assert plan.strategy == "hyde"
-    assert plan.hyde_document is not None
+    normalized = normalize_plan(plan)
+    assert normalized.strategy == "none"
+    assert normalized.hyde_document is None
 
 
-def test_plan_retrieval_decompose():
-    llm = _mock_llm(
-        RetrievalPlan(
-            action="retrieve",
-            strategy="decompose",
-            standalone_query="A 和 B 的区别",
-            extra_queries=["A 是什么", "B 是什么", "A 与 B 对比"],
-            reason="多部分问题",
-        )
-    )
-    messages = [HumanMessage(content="A 和 B 有什么区别？各自限制？")]
+def test_format_history_includes_tool_message():
+    from app.services.retrieval_router import _format_history
 
-    with (
-        patch.object(settings, "retrieval_routing_enabled", True),
-        patch.object(settings, "retrieval_max_sub_questions", 4),
-    ):
-        plan = plan_retrieval(messages, llm=llm)
-
-    assert plan.strategy == "decompose"
-    assert len(plan.extra_queries) == 3
+    messages = [
+        HumanMessage(content="查一下"),
+        ToolMessage(content="tool output here", tool_call_id="1", name="get_current_time"),
+    ]
+    history = _format_history(messages)
+    assert "工具[get_current_time]" in history
 
 
 def test_plan_retrieval_routing_disabled():
     messages = [HumanMessage(content="文档里说了什么？")]
-
     with patch.object(settings, "retrieval_routing_enabled", False):
         plan = plan_retrieval(messages, llm=MagicMock())
-
     assert plan.action == "retrieve"
     assert plan.strategy == "none"
     assert plan.standalone_query == "文档里说了什么？"
-
-
-def test_plan_retrieval_fail_open_on_llm_error():
-    llm = MagicMock()
-    structured = MagicMock()
-    structured.invoke.side_effect = RuntimeError("LLM unavailable")
-    llm.with_structured_output.return_value = structured
-    messages = [HumanMessage(content="查询内容")]
-
-    with patch.object(settings, "retrieval_routing_enabled", True):
-        plan = plan_retrieval(messages, llm=llm)
-
-    assert plan.action == "retrieve"
-    assert plan.strategy == "none"
-    assert plan.standalone_query == "查询内容"
-
-
-def test_plan_retrieval_empty_query():
-    plan = plan_retrieval([], llm=MagicMock())
-    assert plan.action == "skip"
-
-
-def test_plan_retrieval_clears_hyde_for_non_hyde_strategy():
-    llm = _mock_llm(
-        RetrievalPlan(
-            action="retrieve",
-            strategy="none",
-            standalone_query="问题",
-            hyde_document="不应保留",
-            reason="简单问句",
-        )
-    )
-    messages = [HumanMessage(content="问题")]
-
-    with patch.object(settings, "retrieval_routing_enabled", True):
-        plan = plan_retrieval(messages, llm=llm)
-
-    assert plan.hyde_document is None

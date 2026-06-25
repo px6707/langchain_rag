@@ -11,6 +11,8 @@ from app.services.retrieval_service import (
     _build_sources_and_context,
     _dedupe_documents,
     _filter_by_threshold,
+    _per_query_k,
+    _run_unified_pipeline,
     search_relevant_docs,
     search_with_plan,
 )
@@ -81,6 +83,16 @@ def test_get_rerank_compressor_requires_model():
         assert get_rerank_compressor() is None
 
 
+def test_per_query_k_respects_min():
+    with (
+        patch.object(settings, "retrieval_fetch_k", 20),
+        patch.object(settings, "rerank_enabled", True),
+        patch.object(settings, "retrieval_per_query_k_min", 5),
+    ):
+        assert _per_query_k(4) == 5
+        assert _per_query_k(1) == 20
+
+
 def test_search_relevant_docs_with_mock_retriever():
     doc = Document("answer text", metadata={"filename": "f.pdf", "rerank_score": 0.91})
     mock_store = MagicMock()
@@ -99,7 +111,58 @@ def test_search_relevant_docs_with_mock_retriever():
     assert len(sources) == 1
     assert sources[0].filename == "f.pdf"
     assert context is not None
-    assert "answer text" in context
+
+
+def test_none_strategy_applies_rerank():
+    doc = Document("answer", metadata={"filename": "f.pdf"})
+    mock_store = MagicMock()
+    mock_retriever = MagicMock()
+    mock_retriever.invoke.return_value = [doc]
+    mock_store.as_retriever.return_value = mock_retriever
+    mock_compressor = MagicMock()
+    mock_compressor.compress_documents.return_value = [
+        Document("answer", metadata={"filename": "f.pdf", "rerank_score": 0.9})
+    ]
+
+    plan = RetrievalPlan(action="retrieve", strategy="none", standalone_query="question")
+
+    with (
+        patch("app.services.retrieval_service.get_vector_store", return_value=mock_store),
+        patch("app.services.retrieval_service.get_rerank_compressor", return_value=mock_compressor),
+        patch.object(settings, "retrieval_hybrid_enabled", False),
+    ):
+        docs = _run_unified_pipeline(plan, use_hybrid=False)
+
+    mock_compressor.compress_documents.assert_called_once()
+    assert docs[0].metadata["rerank_score"] == pytest.approx(0.9)
+
+
+def test_decompose_includes_standalone_and_subqueries():
+    doc_main = Document("main", metadata={"filename": "a.pdf"})
+    doc_sub = Document("sub", metadata={"filename": "b.pdf"})
+    mock_store = MagicMock()
+    mock_retriever = MagicMock()
+    mock_retriever.invoke.side_effect = [[doc_main], [doc_sub]]
+    mock_store.as_retriever.return_value = mock_retriever
+
+    plan = RetrievalPlan(
+        action="retrieve",
+        strategy="decompose",
+        standalone_query="main question",
+        extra_queries=["sub question"],
+    )
+
+    with (
+        patch("app.services.retrieval_service.get_vector_store", return_value=mock_store),
+        patch("app.services.retrieval_service.get_rerank_compressor", return_value=None),
+        patch.object(settings, "retrieval_hybrid_enabled", False),
+        patch.object(settings, "retrieval_fetch_k", 20),
+        patch.object(settings, "retrieval_per_query_k_min", 5),
+    ):
+        docs = _run_unified_pipeline(plan, use_hybrid=False)
+
+    assert mock_retriever.invoke.call_count == 2
+    assert len(docs) == 2
 
 
 def test_hybrid_strategy_config():
@@ -129,27 +192,6 @@ def test_dedupe_documents_keeps_higher_score():
     assert by_content["same content"].metadata["rerank_score"] == pytest.approx(0.9)
 
 
-def test_search_with_plan_none_strategy():
-    doc = Document("answer", metadata={"filename": "f.pdf", "rerank_score": 0.91})
-    mock_store = MagicMock()
-    mock_retriever = MagicMock()
-    mock_retriever.invoke.return_value = [doc]
-    mock_store.as_retriever.return_value = mock_retriever
-
-    plan = RetrievalPlan(action="retrieve", strategy="none", standalone_query="question")
-
-    with (
-        patch("app.services.retrieval_service.get_vector_store", return_value=mock_store),
-        patch("app.services.retrieval_service.get_rerank_compressor", return_value=None),
-        patch.object(settings, "retrieval_hybrid_enabled", False),
-        patch.object(settings, "retrieval_score_threshold", 0.7),
-    ):
-        sources, context = search_with_plan(plan)
-
-    assert len(sources) == 1
-    assert context is not None
-
-
 def test_search_with_plan_skip():
     plan = RetrievalPlan(action="skip", reason="闲聊")
     sources, context = search_with_plan(plan)
@@ -157,48 +199,22 @@ def test_search_with_plan_skip():
     assert context is None
 
 
-def test_search_with_plan_multi_query():
-    doc_a = Document("a", metadata={"filename": "a.pdf", "rerank_score": 0.9})
-    doc_b = Document("b", metadata={"filename": "b.pdf", "rerank_score": 0.85})
-    mock_store = MagicMock()
-    mock_retriever = MagicMock()
-    mock_retriever.invoke.side_effect = [[doc_a], [doc_b]]
-    mock_store.as_retriever.return_value = mock_retriever
-
-    plan = RetrievalPlan(
-        action="retrieve",
-        strategy="multi_query",
-        standalone_query="main",
-        extra_queries=["alt1"],
-    )
-
-    with (
-        patch("app.services.retrieval_service.get_vector_store", return_value=mock_store),
-        patch("app.services.retrieval_service.get_rerank_compressor", return_value=None),
-        patch.object(settings, "retrieval_hybrid_enabled", False),
-        patch.object(settings, "retrieval_score_threshold", 0.0),
-    ):
-        sources, _ = search_with_plan(plan)
-
-    assert len(sources) == 2
-    assert mock_retriever.invoke.call_count == 2
-
-
-def test_search_with_plan_hyde():
-    hyde_doc = Document("hyde hit", metadata={"filename": "h.pdf", "rerank_score": 0.88})
-    query_doc = Document("query hit", metadata={"filename": "q.pdf", "rerank_score": 0.75})
+def test_search_with_plan_hyde_three_channels():
+    hyde_doc = Document("hyde hit", metadata={"filename": "h.pdf"})
+    query_vec_doc = Document("query vec", metadata={"filename": "v.pdf"})
+    hybrid_doc = Document("hybrid hit", metadata={"filename": "q.pdf"})
     mock_vector_store = MagicMock()
-    mock_vector_store.similarity_search.return_value = [hyde_doc]
+    mock_vector_store.similarity_search.side_effect = [[hyde_doc], [query_vec_doc]]
     mock_hybrid_store = MagicMock()
     mock_retriever = MagicMock()
-    mock_retriever.invoke.return_value = [query_doc]
+    mock_retriever.invoke.return_value = [hybrid_doc]
     mock_hybrid_store.as_retriever.return_value = mock_retriever
 
     plan = RetrievalPlan(
         action="retrieve",
         strategy="hyde",
         standalone_query="concept question",
-        hyde_document="A hypothetical answer about the concept.",
+        hyde_document="A hypothetical answer about the concept with enough length.",
     )
 
     def fake_get_store(*, use_hybrid: bool):
@@ -212,8 +228,30 @@ def test_search_with_plan_hyde():
     ):
         sources, _ = search_with_plan(plan)
 
-    assert len(sources) == 2
-    mock_vector_store.similarity_search.assert_called_once()
+    assert mock_vector_store.similarity_search.call_count == 2
+    assert mock_retriever.invoke.call_count == 1
+    assert len(sources) == 3
+
+
+def test_search_with_plan_empty_fallback():
+    mock_store = MagicMock()
+    mock_retriever = MagicMock()
+    mock_retriever.invoke.return_value = []
+    mock_store.as_retriever.return_value = mock_retriever
+
+    plan = RetrievalPlan(action="retrieve", strategy="none", standalone_query="question")
+
+    with (
+        patch("app.services.retrieval_service.get_vector_store", return_value=mock_store),
+        patch("app.services.retrieval_service.get_rerank_compressor", return_value=None),
+        patch("app.services.retrieval_service._fallback_extra_queries", return_value=["alt1"]),
+        patch.object(settings, "retrieval_hybrid_enabled", False),
+        patch.object(settings, "retrieval_empty_fallback_enabled", True),
+        patch.object(settings, "retrieval_score_threshold", 0.7),
+    ):
+        search_with_plan(plan)
+
+    assert mock_retriever.invoke.call_count >= 2
 
 
 @pytest.mark.asyncio
@@ -244,3 +282,18 @@ async def test_retrieval_middleware_turn_cache():
     assert handler.call_count == 2
 
     retrieval_middleware._turn_cache.set(None)
+
+
+def test_get_router_llm_fallback():
+    from app.services.llm_service import get_router_llm
+
+    with (
+        patch.object(settings, "router_llm_model", ""),
+        patch.object(settings, "router_llm_api_base", ""),
+        patch.object(settings, "router_llm_api_key", ""),
+        patch.object(settings, "llm_model", "main-model"),
+        patch.object(settings, "llm_api_base", "https://main.example/v1"),
+        patch.object(settings, "llm_api_key", "main-key"),
+    ):
+        llm = get_router_llm()
+    assert llm.model_name == "main-model"

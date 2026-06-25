@@ -103,7 +103,9 @@ class RetrievalMiddleware(AgentMiddleware[AgentState[Any], None, Any]):
             if plan.action == "skip":
                 sources, context = [], None
             else:
-                sources, context = await asyncio.to_thread(search_with_plan, plan)
+                sources, context = await asyncio.to_thread(
+                    search_with_plan, plan, llm=self._llm
+                )
 
             if turn_key:
                 _turn_cache.set((turn_key, sources, context))

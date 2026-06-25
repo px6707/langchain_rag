@@ -49,6 +49,14 @@ class Settings(BaseSettings):
     retrieval_router_tool_names: str = (  # 写入路由 prompt 的工具名列表，用于识别纯工具意图
         "get_current_time,send_email,run_skill_script,load_skill,write_todos"
     )
+    router_llm_api_base: str = ""  # 检索路由/改写专用 LLM API 地址；空则回退 llm_api_base
+    router_llm_api_key: str = ""  # 检索路由/改写专用 LLM 密钥；空则回退 llm_api_key
+    router_llm_model: str = ""  # 检索路由/改写专用模型；空则回退 llm_model
+    retrieval_empty_fallback_enabled: bool = True  # none 策略零结果时自动升级为 multi_query 重试
+    retrieval_tool_context_max_chars: int = 500  # 路由历史中 ToolMessage 内容截断长度
+    retrieval_per_query_k_min: int = 5  # 多 query 时每路召回 k 的下限
+    retrieval_fusion_rrf_k: int = 60  # 多路召回 RRF 融合的 k 常数
+    retrieval_rrf_parent_weight: float = 1.5  # standalone_query 来源 list 的 RRF 加权系数
 
     # --- 对话历史压缩（SummarizationMiddleware）---
     summarization_trigger_messages: int = 30  # 消息数超过此值时触发历史摘要
