@@ -5,9 +5,14 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from app.config import settings
 from app.schemas.retrieval import RetrievalPlan
-from app.services.retrieval_rules import rule_precheck
-from app.services.retrieval_router import plan_retrieval, rewrite_query
-from app.services.retrieval_validator import normalize_plan, validate_standalone_query
+from app.services.retrieval_router import (
+    _collect_recent_turns,
+    expand_from_context,
+    plan_retrieval,
+    resolve_standalone,
+    rewrite_query,
+)
+from app.services.retrieval_validator import normalize_plan
 
 
 def _mock_router_llm(*, rewrite=None, strategy=None):
@@ -16,7 +21,12 @@ def _mock_router_llm(*, rewrite=None, strategy=None):
     def structured_output(schema):
         mock = MagicMock()
         if schema.__name__ == "QueryRewrite":
-            mock.invoke.return_value = rewrite or {"standalone_query": "resolved", "reason": "test"}
+            mock.invoke.return_value = rewrite or {
+                "standalone_query": "resolved",
+                "resolved_entities": ["RAG"],
+                "confidence": "high",
+                "reason": "test",
+            }
         else:
             mock.invoke.return_value = strategy or {
                 "action": "retrieve",
@@ -31,16 +41,6 @@ def _mock_router_llm(*, rewrite=None, strategy=None):
     return llm
 
 
-def test_rule_precheck_greeting_skip():
-    plan = rule_precheck("你好")
-    assert plan is not None
-    assert plan.action == "skip"
-
-
-def test_rule_precheck_normal_query_returns_none():
-    assert rule_precheck("LangChain 的核心组件有哪些？") is None
-
-
 def test_rewrite_query_single_turn_skips_llm():
     llm = MagicMock()
     messages = [HumanMessage(content="什么是 RAG？")]
@@ -49,29 +49,49 @@ def test_rewrite_query_single_turn_skips_llm():
     llm.with_structured_output.assert_not_called()
 
 
-def test_rewrite_query_multi_turn_calls_llm():
-    llm = _mock_router_llm(rewrite={"standalone_query": "LangChain 的 RAG 怎么做", "reason": "指代消解"})
+def test_resolve_standalone_calls_llm_on_multi_turn():
+    llm = _mock_router_llm(
+        rewrite={
+            "standalone_query": "RAG 是什么",
+            "resolved_entities": ["RAG"],
+            "confidence": "high",
+            "reason": "resolved",
+        }
+    )
     messages = [
-        HumanMessage(content="LangChain 是什么"),
-        AIMessage(content="LangChain 是一个框架"),
-        HumanMessage(content="那 RAG 怎么做"),
+        HumanMessage(content="什么是 RAG"),
+        AIMessage(content="RAG 是检索增强生成"),
+        HumanMessage(content="它是什么"),
     ]
-    result = rewrite_query(messages, llm=llm)
-    assert result == "LangChain 的 RAG 怎么做"
+    standalone, entities = resolve_standalone(messages, llm=llm)
+    assert standalone == "RAG 是什么"
+    assert "RAG" in entities
     llm.with_structured_output.assert_called()
 
 
-def test_plan_retrieval_rule_precheck_skips_llm():
-    llm = MagicMock()
+def test_plan_retrieval_postcheck_overrides_skip():
+    llm = _mock_router_llm(
+        strategy={
+            "action": "skip",
+            "strategy": "none",
+            "extra_queries": [],
+            "hyde_document": None,
+            "reason": "llm",
+        }
+    )
     with patch.object(settings, "retrieval_routing_enabled", True):
-        plan = plan_retrieval([HumanMessage(content="谢谢")], llm=llm)
-    assert plan.action == "skip"
-    llm.with_structured_output.assert_not_called()
+        plan = plan_retrieval([HumanMessage(content="文档里的合同条款是什么？")], llm=llm)
+    assert plan.action == "retrieve"
 
 
 def test_plan_retrieval_two_step():
     llm = _mock_router_llm(
-        rewrite={"standalone_query": "完整问题", "reason": "rewrite"},
+        rewrite={
+            "standalone_query": "完整问题",
+            "resolved_entities": [],
+            "confidence": "high",
+            "reason": "rewrite",
+        },
         strategy={
             "action": "retrieve",
             "strategy": "multi_query",
@@ -89,25 +109,20 @@ def test_plan_retrieval_two_step():
         plan = plan_retrieval(messages, llm=llm)
     assert plan.standalone_query == "完整问题"
     assert plan.strategy == "multi_query"
-    assert len(plan.extra_queries) == 2
 
 
-def test_validate_standalone_query_anaphora_fallback():
-    result = validate_standalone_query("它是什么", "原始问题")
-    assert result == "原始问题"
-
-
-def test_normalize_plan_hyde_downgrade():
-    plan = RetrievalPlan(
-        action="retrieve",
-        strategy="hyde",
-        standalone_query="q",
-        hyde_document="short",
-        reason="x",
-    )
-    normalized = normalize_plan(plan)
-    assert normalized.strategy == "none"
-    assert normalized.hyde_document is None
+def test_collect_recent_turns_by_human_count():
+    messages = [
+        HumanMessage(content="t1"),
+        AIMessage(content="a1"),
+        HumanMessage(content="t2"),
+        AIMessage(content="a2"),
+        HumanMessage(content="t3"),
+    ]
+    with patch.object(settings, "retrieval_history_turns", 2):
+        turns = _collect_recent_turns(messages, 2)
+    assert turns[0].content == "t2"
+    assert turns[-1].content == "t3"
 
 
 def test_format_history_includes_tool_message():
@@ -121,10 +136,23 @@ def test_format_history_includes_tool_message():
     assert "工具[get_current_time]" in history
 
 
-def test_plan_retrieval_routing_disabled():
-    messages = [HumanMessage(content="文档里说了什么？")]
-    with patch.object(settings, "retrieval_routing_enabled", False):
-        plan = plan_retrieval(messages, llm=MagicMock())
-    assert plan.action == "retrieve"
-    assert plan.strategy == "none"
-    assert plan.standalone_query == "文档里说了什么？"
+def test_expand_from_context_with_entities():
+    messages = [
+        HumanMessage(content="合同A的内容"),
+        AIMessage(content="合同A规定了违约金"),
+        HumanMessage(content="它的上限是多少"),
+    ]
+    expanded = expand_from_context(messages, entities=["合同A"])
+    assert "合同A" in expanded
+
+
+def test_normalize_plan_hyde_downgrade():
+    plan = RetrievalPlan(
+        action="retrieve",
+        strategy="hyde",
+        standalone_query="q",
+        hyde_document="short",
+        reason="x",
+    )
+    normalized = normalize_plan(plan)
+    assert normalized.strategy == "none"

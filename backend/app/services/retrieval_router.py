@@ -1,4 +1,5 @@
 import logging
+from contextvars import ContextVar
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
@@ -6,18 +7,25 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMe
 from app.config import settings
 from app.schemas.retrieval import QueryRewrite, RetrievalPlan, StrategyPlan
 from app.services.llm_service import get_router_llm
-from app.services.retrieval_rules import rule_precheck
-from app.services.retrieval_validator import ANAPHORA_RE, normalize_plan, validate_standalone_query
+from app.services.retrieval_rules import rule_postcheck_retrieve, rule_precheck
+from app.services.retrieval_validator import has_anaphora, normalize_plan, suggest_strategy
 
 logger = logging.getLogger(__name__)
+
+_session_entities: ContextVar[list[str] | None] = ContextVar("session_entities", default=None)
 
 REWRITE_SYSTEM_PROMPT = """你是 RAG 查询改写器。根据对话历史，将最新用户消息改写为可独立用于文档检索的自包含问题。
 
 要求：
-- standalone_query 必须完整、不得含「它」「这个」「上面」「刚才」等指代
+- standalone_query 必须完整、不得含指代词（它/这个/上面/刚才/后者/前者/this/that 等）
 - 结合对话与工具结果上下文解析指代
-- 若用户消息本身已自包含，可原样输出
+- resolved_entities 列出对话中的关键实体（文件名、产品名、合同名等）
+- confidence=low 表示指代消解不确定
+- 若用户消息本身已自包含，可原样输出且 confidence=high
 - reason 用一句话中文说明改写依据"""
+
+REWRITE_FORCE_SYSTEM_PROMPT = """你是 RAG 查询改写器。上次改写仍含指代词，本次必须输出完全自包含、不含任何指代词的检索问题。
+必须结合对话历史将指代全部替换为具体实体或完整描述。"""
 
 STRATEGY_SYSTEM_PROMPT = """你是 RAG 检索策略路由器。根据对话与已改写 query，决定是否检索文档库并选择 query 变换策略。
 
@@ -39,12 +47,19 @@ STRATEGY_SYSTEM_PROMPT = """你是 RAG 检索策略路由器。根据对话与�
 - none：简单事实问句，已改写 query 已足够
 - multi_query：表述宽泛，需多角度同义 query；填充 extra_queries（{multi_query_count} 条左右）
 - hyde：概念抽象、措辞可能与文档不一致；填充 hyde_document（假设性答案段落，100-200 字）
-- decompose：多部分/对比/因果链；填充 extra_queries（子问题，最多 {max_sub_questions} 条，不含已提供的 standalone_query）
+- decompose：多部分/对比/因果链；填充 extra_queries（子问题，最多 {max_sub_questions} 条，不含 standalone_query）
 
 ## 输出约束
-- extra_queries 仅在 multi_query 或 decompose 时填充
+- extra_queries 仅在 multi_query 或 decompose 时填充，且不得重复 standalone_query
 - hyde_document 仅在 hyde 时填充，否则为 null
-- reason 用一句话中文说明决策依据"""
+- reason 用一句话中文说明决策依据
+
+## 示例
+- 「LangChain 是什么？」→ retrieve, none
+- 「RAG 有哪些优缺点和适用场景？」→ retrieve, multi_query, extra=[「RAG 优点」,「RAG 缺点」,「RAG 适用场景」]
+- 「向量数据库的工作原理（文档措辞可能不同）」→ retrieve, hyde, hyde_document=假设性答案段落
+- 「Elasticsearch 和 Milvus 的区别及各自限制？」→ retrieve, decompose, extra=[「Elasticsearch 是什么」,「Milvus 是什么」,「两者区别」]
+- 「你好」→ skip"""
 
 
 def _get_last_user_message(messages: list) -> str | None:
@@ -55,10 +70,36 @@ def _get_last_user_message(messages: list) -> str | None:
     return None
 
 
-def _truncate(text: str, max_chars: int) -> str:
+def _get_previous_human_message(messages: list) -> str | None:
+    seen_last = False
+    for msg in reversed(messages):
+        if isinstance(msg, HumanMessage):
+            content = msg.content if isinstance(msg.content, str) else str(msg.content)
+            if not seen_last:
+                seen_last = True
+                continue
+            return content
+    return None
+
+
+def _get_last_ai_message(messages: list) -> str | None:
+    for msg in reversed(messages):
+        if isinstance(msg, AIMessage):
+            content = msg.content if isinstance(msg.content, str) else str(msg.content)
+            return content
+    return None
+
+
+def _truncate_smart(text: str, max_chars: int) -> str:
     if len(text) <= max_chars:
         return text
-    return text[: max_chars - 3] + "..."
+    head_len = int(max_chars * 0.6)
+    tail_len = max_chars - head_len - 10
+    return f"{text[:head_len]}...[截断]...{text[-tail_len:]}"
+
+
+def _truncate(text: str, max_chars: int) -> str:
+    return _truncate_smart(text, max_chars)
 
 
 def _format_tool_calls(msg: AIMessage) -> str | None:
@@ -100,10 +141,29 @@ def _format_message(msg: BaseMessage) -> str | None:
     return None
 
 
+def _collect_recent_turns(messages: list, max_turns: int) -> list[BaseMessage]:
+    collected: list[BaseMessage] = []
+    human_seen = 0
+    for msg in reversed(messages):
+        collected.append(msg)
+        if isinstance(msg, HumanMessage):
+            human_seen += 1
+            if human_seen >= max_turns:
+                break
+    collected.reverse()
+    if len(collected) > settings.retrieval_history_messages:
+        collected = collected[-settings.retrieval_history_messages :]
+    return collected
+
+
 def _format_history(messages: list) -> str:
-    recent = messages[-settings.retrieval_history_messages :]
+    recent = _collect_recent_turns(messages, settings.retrieval_history_turns)
+    known_entities = _session_entities.get() or []
     lines = [line for msg in recent if (line := _format_message(msg))]
-    return "\n".join(lines) if lines else "（无历史）"
+    history = "\n".join(lines) if lines else "（无历史）"
+    if known_entities:
+        history = f"已知实体: {', '.join(known_entities)}\n{history}"
+    return history
 
 
 def _needs_rewrite(messages: list) -> bool:
@@ -120,13 +180,49 @@ def _build_strategy_prompt() -> str:
     )
 
 
-def _fallback_plan(query: str, *, reason: str) -> RetrievalPlan:
-    return RetrievalPlan(
-        action="retrieve",
-        strategy="none",
-        standalone_query=query,
-        reason=reason,
+def _apply_entities(standalone: str, entities: list[str]) -> str:
+    if not entities or not has_anaphora(standalone):
+        return standalone
+    prefix = "、".join(entities[:5])
+    return f"关于{prefix}：{standalone}"
+
+
+def expand_from_context(messages: list, *, entities: list[str] | None = None) -> str:
+    query = _get_last_user_message(messages) or ""
+    ai_excerpt = (_get_last_ai_message(messages) or "")[:300]
+    prev_human = _get_previous_human_message(messages)
+
+    if ai_excerpt:
+        standalone = f"「{ai_excerpt}」相关问题：{query}"
+    elif prev_human:
+        standalone = f"上一轮问题「{prev_human}」的后续：{query}"
+    else:
+        standalone = query
+
+    return _apply_entities(standalone, entities or [])
+
+
+def _invoke_rewrite(
+    messages: list,
+    *,
+    llm: BaseChatModel,
+    force: bool = False,
+) -> QueryRewrite:
+    query = _get_last_user_message(messages) or ""
+    history = _format_history(messages)
+    system = REWRITE_FORCE_SYSTEM_PROMPT if force else REWRITE_SYSTEM_PROMPT
+    user_prompt = f"## 对话历史\n{history}\n\n## 最新用户消息\n{query}"
+    if force:
+        user_prompt += "\n\n注意：上次改写仍含指代词，本次必须完全消解。"
+
+    structured = llm.with_structured_output(QueryRewrite)
+    raw = structured.invoke(
+        [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user_prompt},
+        ]
     )
+    return QueryRewrite.model_validate(raw)
 
 
 def rewrite_query(
@@ -134,32 +230,55 @@ def rewrite_query(
     *,
     llm: BaseChatModel | None = None,
 ) -> str:
+    return resolve_standalone(messages, llm=llm)[0]
+
+
+def rewrite_query_force(messages: list, *, llm: BaseChatModel | None = None) -> QueryRewrite:
+    model = llm or get_router_llm()
+    return _invoke_rewrite(messages, llm=model, force=True)
+
+
+def resolve_standalone(
+    messages: list,
+    *,
+    llm: BaseChatModel | None = None,
+) -> tuple[str, list[str]]:
     query = _get_last_user_message(messages)
     if not query or not query.strip():
-        return ""
+        return "", []
 
     if not _needs_rewrite(messages):
-        return query.strip()
+        return query.strip(), []
 
-    history = _format_history(messages)
-    user_prompt = f"## 对话历史\n{history}\n\n## 最新用户消息\n{query}"
     model = llm or get_router_llm()
-    structured = model.with_structured_output(QueryRewrite)
+    entities: list[str] = []
 
     try:
-        raw = structured.invoke(
-            [
-                {"role": "system", "content": REWRITE_SYSTEM_PROMPT},
-                {"role": "user", "content": user_prompt},
-            ]
-        )
-        rewrite = QueryRewrite.model_validate(raw)
+        rewrite = _invoke_rewrite(messages, llm=model, force=False)
         standalone = rewrite.standalone_query.strip() or query.strip()
-        logger.info("Query rewrite: %s -> %s (%s)", query, standalone, rewrite.reason)
-        return standalone
+        entities = rewrite.resolved_entities
+
+        if has_anaphora(standalone) or rewrite.confidence == "low":
+            rewrite = _invoke_rewrite(messages, llm=model, force=True)
+            standalone = rewrite.standalone_query.strip() or standalone
+            entities = rewrite.resolved_entities or entities
+
+        if has_anaphora(standalone):
+            standalone = expand_from_context(messages, entities=entities)
+
+        if has_anaphora(standalone) and not _get_last_ai_message(messages):
+            standalone = query.strip()
+
+        standalone = _apply_entities(standalone, entities)
+        _session_entities.set(entities)
+        logger.info("Query rewrite resolved: %s -> %s", query, standalone)
+        return standalone, entities
     except Exception:
-        logger.exception("Query rewrite failed; using original query")
-        return query.strip()
+        logger.exception("Query rewrite failed; expanding from context")
+        expanded = expand_from_context(messages, entities=entities)
+        if has_anaphora(expanded) and not _get_last_ai_message(messages):
+            expanded = query.strip()
+        return expanded, entities
 
 
 def plan_strategy(
@@ -169,9 +288,12 @@ def plan_strategy(
     llm: BaseChatModel | None = None,
 ) -> StrategyPlan:
     history = _format_history(messages)
+    hint = suggest_strategy(standalone_query)
+    hint_text = f"\n## 建议策略（可参考）：{hint}" if hint else ""
     user_prompt = (
         f"## 对话历史\n{history}\n\n"
         f"## 已改写 query（standalone_query）\n{standalone_query}"
+        f"{hint_text}"
     )
     model = llm or get_router_llm()
     structured = model.with_structured_output(StrategyPlan)
@@ -197,6 +319,15 @@ def plan_strategy(
     return strategy
 
 
+def _fallback_plan(query: str, *, reason: str) -> RetrievalPlan:
+    return RetrievalPlan(
+        action="retrieve",
+        strategy="none",
+        standalone_query=query,
+        reason=reason,
+    )
+
+
 def plan_retrieval(
     messages: list,
     *,
@@ -206,26 +337,21 @@ def plan_retrieval(
     if not query or not query.strip():
         return RetrievalPlan(action="skip", reason="用户消息为空")
 
-    ruled = rule_precheck(query)
-    if ruled is not None:
-        logger.info("Rule precheck: action=%s reason=%s", ruled.action, ruled.reason)
-        return ruled
+    original = query.strip()
+    ruled = rule_precheck(original)
+    if ruled is not None and ruled.action == "skip":
+        ruled = rule_postcheck_retrieve(original, ruled)
+        if ruled.action == "skip":
+            logger.info("Rule precheck+postcheck skip: %s", ruled.reason)
+            return ruled
 
     if not settings.retrieval_routing_enabled:
-        return _fallback_plan(query, reason="检索路由已关闭")
+        return _fallback_plan(original, reason="检索路由已关闭")
 
     model = llm or get_router_llm()
-    original = query.strip()
-    multi_turn = _needs_rewrite(messages)
 
     try:
-        standalone = rewrite_query(messages, llm=model)
-        standalone = validate_standalone_query(standalone, original)
-
-        if multi_turn and ANAPHORA_RE.search(original):
-            standalone = rewrite_query(messages, llm=model)
-            standalone = validate_standalone_query(standalone, original)
-
+        standalone, _ = resolve_standalone(messages, llm=model)
         strategy = plan_strategy(messages, standalone, llm=model)
         plan = RetrievalPlan(
             action=strategy.action,
@@ -238,6 +364,8 @@ def plan_retrieval(
     except Exception:
         logger.exception("Retrieval routing failed; falling back to direct retrieval")
         return _fallback_plan(original, reason="路由异常，fail-open 直接检索")
+
+    plan = rule_postcheck_retrieve(original, plan)
 
     if plan.action == "skip":
         logger.info("Retrieval skipped: %s", plan.reason)

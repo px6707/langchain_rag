@@ -57,6 +57,14 @@ class Settings(BaseSettings):
     retrieval_per_query_k_min: int = 5  # 多 query 时每路召回 k 的下限
     retrieval_fusion_rrf_k: int = 60  # 多路召回 RRF 融合的 k 常数
     retrieval_rrf_parent_weight: float = 1.5  # standalone_query 来源 list 的 RRF 加权系数
+    retrieval_history_turns: int = 4  # 路由/改写可见的最近对话轮数（Human 消息计轮）
+    retrieval_doc_intent_keywords: str = (  # postcheck 强制 retrieve 的文档意图关键词，逗号分隔
+        "文档,文件,条款,合同,报告,pdf,上传,资料,检索,章节,附件"
+    )
+    retrieval_fallback_threshold_ratio: float = 0.5  # 分级 fallback 降阈值比例
+    retrieval_fallback_k_multiplier: float = 2.0  # 分级 fallback 最后一级 k 放大倍数
+    retrieval_fallback_max_tiers: int = 4  # 分级 fallback 最大 tier 数
+    retrieval_hyde_min_score: float = 0.3  # HyDE 假设文档与 query 的 embedding 相似度下限
 
     # --- 对话历史压缩（SummarizationMiddleware）---
     summarization_trigger_messages: int = 30  # 消息数超过此值时触发历史摘要

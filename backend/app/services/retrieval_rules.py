@@ -1,6 +1,8 @@
 import re
 
+from app.config import settings
 from app.schemas.retrieval import RetrievalPlan
+from app.services.retrieval_validator import has_anaphora, has_doc_intent
 
 _GREETING_RE = re.compile(
     r"^(你好|您好|hi|hello|hey|谢谢|感谢|多谢|再见|拜拜|早上好|晚上好)[!！?？。.\s]*$",
@@ -29,3 +31,41 @@ def rule_precheck(query: str) -> RetrievalPlan | None:
                 return RetrievalPlan(action="skip", reason="规则匹配：纯工具意图")
 
     return None
+
+
+def rule_postcheck_retrieve(query: str, plan: RetrievalPlan) -> RetrievalPlan:
+    text = query.strip()
+    if plan.action != "skip":
+        return plan
+
+    if has_doc_intent(text):
+        return plan.model_copy(
+            update={
+                "action": "retrieve",
+                "strategy": "none",
+                "standalone_query": text,
+                "reason": "规则 postcheck：文档意图强制 retrieve",
+            }
+        )
+
+    if len(text) > 15 and ("?" in text or "？" in text):
+        return plan.model_copy(
+            update={
+                "action": "retrieve",
+                "strategy": "none",
+                "standalone_query": text,
+                "reason": "规则 postcheck：长问句强制 retrieve",
+            }
+        )
+
+    if has_anaphora(text):
+        return plan.model_copy(
+            update={
+                "action": "retrieve",
+                "strategy": "none",
+                "standalone_query": text,
+                "reason": "规则 postcheck：指代追问强制 retrieve",
+            }
+        )
+
+    return plan

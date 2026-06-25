@@ -1,3 +1,4 @@
+from langchain_core.documents import Document
 from langchain_elasticsearch import DenseVectorStrategy, ElasticsearchStore
 
 from app.config import settings
@@ -24,3 +25,24 @@ def get_vector_store(*, use_hybrid: bool | None = None) -> ElasticsearchStore:
 
 def clear_vector_store_cache() -> None:
     _store_cache.clear()
+
+
+def _hit_to_document(hit: dict) -> Document:
+    source = hit.get("_source", {})
+    text = source.get("text") or source.get("page_content") or ""
+    metadata = source.get("metadata") or {}
+    if not isinstance(metadata, dict):
+        metadata = {"raw_metadata": metadata}
+    return Document(page_content=text, metadata=metadata)
+
+
+def bm25_search(query: str, *, k: int) -> list[Document]:
+    store = get_vector_store(use_hybrid=False)
+    client = store.client
+    response = client.search(
+        index=settings.es_index,
+        query={"match": {"text": query}},
+        size=k,
+    )
+    hits = response.get("hits", {}).get("hits", [])
+    return [_hit_to_document(hit) for hit in hits]

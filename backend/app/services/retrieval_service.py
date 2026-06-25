@@ -1,5 +1,6 @@
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 
 from langchain_core.documents import Document
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -12,13 +13,21 @@ from app.services.llm_service import get_router_llm
 from app.services.rerank_service import get_rerank_compressor
 from app.services.retrieval_fusion import rrf_fuse
 from app.services.retrieval_validator import normalize_plan
-from app.services.vector_store_service import get_vector_store
+from app.services.vector_store_service import bm25_search, get_vector_store
 
 logger = logging.getLogger(__name__)
 
 
 class FallbackQueries(BaseModel):
     queries: list[str] = Field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class _TierConfig:
+    plan: RetrievalPlan
+    threshold: float
+    use_hybrid: bool
+    k_multiplier: float
 
 
 def _doc_score(doc: Document) -> float | None:
@@ -56,36 +65,48 @@ def _build_sources_and_context(docs: list[Document]) -> tuple[list[SourceInfo], 
     return sources, context
 
 
-def _filter_by_threshold(docs: list[Document]) -> list[Document]:
+def _filter_by_threshold(docs: list[Document], threshold: float | None = None) -> list[Document]:
     if not docs:
         return []
 
+    cutoff = settings.retrieval_score_threshold if threshold is None else threshold
     scored = [(doc, _doc_score(doc)) for doc in docs]
     if any(score is not None for _, score in scored):
         return [
             doc
             for doc, score in scored
-            if score is not None and score >= settings.retrieval_score_threshold
+            if score is not None and score >= cutoff
         ]
     return docs
 
 
-def _fetch_k() -> int:
-    return settings.retrieval_fetch_k if settings.rerank_enabled else settings.rerank_top_n
+def _fetch_k(*, k_multiplier: float = 1.0) -> int:
+    base = settings.retrieval_fetch_k if settings.rerank_enabled else settings.rerank_top_n
+    return max(settings.retrieval_per_query_k_min, int(base * k_multiplier))
 
 
-def _per_query_k(n_lists: int) -> int:
-    return max(settings.retrieval_per_query_k_min, _fetch_k() // max(n_lists, 1))
+def _per_query_k(n_lists: int, *, k_multiplier: float = 1.0) -> int:
+    return max(settings.retrieval_per_query_k_min, _fetch_k(k_multiplier=k_multiplier) // max(n_lists, 1))
 
 
-def _retrieve_raw(query: str, *, use_hybrid: bool, k: int | None = None) -> list[Document]:
+def _retrieve_raw(
+    query: str,
+    *,
+    use_hybrid: bool,
+    k: int | None = None,
+) -> list[Document]:
     fetch_k = k if k is not None else _fetch_k()
     store = get_vector_store(use_hybrid=use_hybrid)
     base_retriever = store.as_retriever(search_kwargs={"k": fetch_k})
     return list(base_retriever.invoke(query))
 
 
-def _retrieve_with_hybrid_fallback(query: str, *, use_hybrid: bool, k: int | None = None) -> list[Document]:
+def _retrieve_with_hybrid_fallback(
+    query: str,
+    *,
+    use_hybrid: bool,
+    k: int | None = None,
+) -> list[Document]:
     if use_hybrid:
         try:
             return _retrieve_raw(query, use_hybrid=True, k=k)
@@ -124,19 +145,26 @@ def _unique_queries(queries: list[str]) -> list[str]:
     return list(dict.fromkeys(q.strip() for q in queries if q.strip()))
 
 
-def _collect_query_lists(queries: list[str], *, use_hybrid: bool) -> list[list[Document]]:
+def _collect_query_lists(
+    queries: list[str],
+    *,
+    use_hybrid: bool,
+    k_multiplier: float = 1.0,
+) -> list[list[Document]]:
     unique = _unique_queries(queries)
     if not unique:
         return []
 
-    per_k = _per_query_k(len(unique))
+    per_k = _per_query_k(len(unique), k_multiplier=k_multiplier)
     if len(unique) == 1:
         return [_retrieve_with_hybrid_fallback(unique[0], use_hybrid=use_hybrid, k=per_k)]
 
     lists: list[list[Document]] = [[] for _ in unique]
     with ThreadPoolExecutor(max_workers=min(len(unique), 4)) as executor:
         future_to_idx = {
-            executor.submit(_retrieve_with_hybrid_fallback, q, use_hybrid=use_hybrid, k=per_k): idx
+            executor.submit(
+                _retrieve_with_hybrid_fallback, q, use_hybrid=use_hybrid, k=per_k
+            ): idx
             for idx, q in enumerate(unique)
         }
         for future in as_completed(future_to_idx):
@@ -144,56 +172,84 @@ def _collect_query_lists(queries: list[str], *, use_hybrid: bool) -> list[list[D
     return lists
 
 
-def _collect_hyde_lists(query: str, hyde_doc: str, *, use_hybrid: bool) -> list[list[Document]]:
-    per_k = _per_query_k(3 if use_hybrid else 2)
+def _collect_hyde_lists(
+    plan: RetrievalPlan,
+    *,
+    use_hybrid: bool,
+    k_multiplier: float = 1.0,
+) -> tuple[list[list[Document]], list[float]]:
+    query = plan.standalone_query.strip()
+    hyde_doc = (plan.hyde_document or "").strip()
+
+    channel_count = 1 + (1 if use_hybrid else 0)
+    if plan.hyde_vector_enabled and hyde_doc:
+        channel_count += 1
+    per_k = _per_query_k(channel_count, k_multiplier=k_multiplier)
+
     vector_store = get_vector_store(use_hybrid=False)
-    lists: list[list[Document]] = [
-        vector_store.similarity_search(hyde_doc, k=per_k),
-        vector_store.similarity_search(query, k=per_k),
-    ]
+    lists: list[list[Document]] = []
+    weights: list[float] = []
+
+    if plan.hyde_vector_enabled and hyde_doc:
+        lists.append(vector_store.similarity_search(hyde_doc, k=per_k))
+        weights.append(1.0)
+
+    lists.append(vector_store.similarity_search(query, k=per_k))
+    weights.append(settings.retrieval_rrf_parent_weight)
+
     if use_hybrid:
-        lists.append(_retrieve_with_hybrid_fallback(query, use_hybrid=True, k=per_k))
-    return lists
+        lists.append(bm25_search(query, k=per_k))
+        weights.append(settings.retrieval_rrf_parent_weight)
+
+    return lists, weights
 
 
-def _collect_lists(plan: RetrievalPlan, *, use_hybrid: bool) -> tuple[list[list[Document]], list[float]]:
+def _collect_lists(
+    plan: RetrievalPlan,
+    *,
+    use_hybrid: bool,
+    k_multiplier: float = 1.0,
+) -> tuple[list[list[Document]], list[float]]:
     query = plan.standalone_query.strip()
     if not query:
         return [], []
 
     if plan.strategy == "hyde" and plan.hyde_document:
-        lists = _collect_hyde_lists(query, plan.hyde_document, use_hybrid=use_hybrid)
-        weights = [1.0, settings.retrieval_rrf_parent_weight, settings.retrieval_rrf_parent_weight]
-        if not use_hybrid:
-            weights = weights[:2]
-        return lists, weights
+        return _collect_hyde_lists(plan, use_hybrid=use_hybrid, k_multiplier=k_multiplier)
 
     if plan.strategy in ("multi_query", "decompose"):
         queries = _unique_queries([query, *plan.extra_queries])
-        lists = _collect_query_lists(queries, use_hybrid=use_hybrid)
+        lists = _collect_query_lists(queries, use_hybrid=use_hybrid, k_multiplier=k_multiplier)
         weights = [
             settings.retrieval_rrf_parent_weight if idx == 0 else 1.0 for idx in range(len(lists))
         ]
         return lists, weights
 
-    lists = [_retrieve_with_hybrid_fallback(query, use_hybrid=use_hybrid, k=_fetch_k())]
+    lists = [
+        _retrieve_with_hybrid_fallback(
+            query,
+            use_hybrid=use_hybrid,
+            k=_fetch_k(k_multiplier=k_multiplier),
+        )
+    ]
     return lists, [settings.retrieval_rrf_parent_weight]
 
 
-def _run_unified_pipeline(plan: RetrievalPlan, *, use_hybrid: bool) -> list[Document]:
+def _run_unified_pipeline(
+    plan: RetrievalPlan,
+    *,
+    use_hybrid: bool,
+    k_multiplier: float = 1.0,
+) -> list[Document]:
     query = plan.standalone_query.strip()
     if not query:
         return []
 
-    lists, weights = _collect_lists(plan, use_hybrid=use_hybrid)
+    lists, weights = _collect_lists(plan, use_hybrid=use_hybrid, k_multiplier=k_multiplier)
     if not lists:
         return []
 
-    if len(lists) == 1:
-        fused = lists[0]
-    else:
-        fused = rrf_fuse(lists, list_weights=weights)
-
+    fused = lists[0] if len(lists) == 1 else rrf_fuse(lists, list_weights=weights)
     docs = _dedupe_documents(fused)
     return _apply_rerank(query, docs)
 
@@ -222,6 +278,53 @@ def _fallback_extra_queries(plan: RetrievalPlan, *, llm: BaseChatModel | None = 
     return [plan.standalone_query]
 
 
+def _build_tier_configs(plan: RetrievalPlan, *, llm: BaseChatModel | None) -> list[_TierConfig]:
+    base_threshold = settings.retrieval_score_threshold
+    lowered = base_threshold * settings.retrieval_fallback_threshold_ratio
+    use_hybrid = settings.retrieval_hybrid_enabled
+
+    multi_plan = plan.model_copy(
+        update={
+            "strategy": "multi_query",
+            "extra_queries": _fallback_extra_queries(plan, llm=llm),
+            "reason": f"{plan.reason}; tier1 multi_query",
+        }
+    )
+
+    return [
+        _TierConfig(plan=plan, threshold=base_threshold, use_hybrid=use_hybrid, k_multiplier=1.0),
+        _TierConfig(plan=multi_plan, threshold=base_threshold, use_hybrid=use_hybrid, k_multiplier=1.0),
+        _TierConfig(plan=multi_plan, threshold=lowered, use_hybrid=use_hybrid, k_multiplier=1.0),
+        _TierConfig(
+            plan=multi_plan,
+            threshold=lowered,
+            use_hybrid=True,
+            k_multiplier=settings.retrieval_fallback_k_multiplier,
+        ),
+    ]
+
+
+def _tiered_search(plan: RetrievalPlan, *, llm: BaseChatModel | None) -> list[Document]:
+    if not settings.retrieval_empty_fallback_enabled:
+        docs = _run_unified_pipeline(plan, use_hybrid=settings.retrieval_hybrid_enabled)
+        return _filter_by_threshold(docs)
+
+    tiers = _build_tier_configs(plan, llm=llm)[: settings.retrieval_fallback_max_tiers]
+    for idx, tier in enumerate(tiers):
+        docs = _run_unified_pipeline(
+            tier.plan,
+            use_hybrid=tier.use_hybrid,
+            k_multiplier=tier.k_multiplier,
+        )
+        filtered = _filter_by_threshold(docs, tier.threshold)
+        if filtered:
+            if idx > 0:
+                logger.info("Tiered fallback succeeded at tier %s", idx)
+            return filtered
+
+    return []
+
+
 def search_with_plan(
     plan: RetrievalPlan,
     *,
@@ -231,26 +334,7 @@ def search_with_plan(
         return [], None
 
     plan = normalize_plan(plan)
-    use_hybrid = settings.retrieval_hybrid_enabled
-    docs = _run_unified_pipeline(plan, use_hybrid=use_hybrid)
-    docs = _filter_by_threshold(docs)
-
-    if (
-        not docs
-        and plan.strategy == "none"
-        and settings.retrieval_empty_fallback_enabled
-    ):
-        logger.info("Empty retrieval with none; upgrading to multi_query")
-        upgraded = plan.model_copy(
-            update={
-                "strategy": "multi_query",
-                "extra_queries": _fallback_extra_queries(plan, llm=llm),
-                "reason": f"{plan.reason}; empty fallback",
-            }
-        )
-        docs = _run_unified_pipeline(upgraded, use_hybrid=use_hybrid)
-        docs = _filter_by_threshold(docs)
-
+    docs = _tiered_search(plan, llm=llm)
     return _build_sources_and_context(docs)
 
 

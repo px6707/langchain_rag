@@ -5,6 +5,8 @@ from pydantic import BaseModel, Field
 
 class QueryRewrite(BaseModel):
     standalone_query: str
+    resolved_entities: list[str] = Field(default_factory=list)
+    confidence: Literal["high", "low"] = "high"
     reason: str = ""
 
 
@@ -22,4 +24,5 @@ class RetrievalPlan(BaseModel):
     standalone_query: str = ""
     extra_queries: list[str] = Field(default_factory=list)
     hyde_document: str | None = None
+    hyde_vector_enabled: bool = True
     reason: str = ""
