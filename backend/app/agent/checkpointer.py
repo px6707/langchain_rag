@@ -1,12 +1,9 @@
 from contextlib import AsyncExitStack
-from typing import TYPE_CHECKING
 
+from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 
 from app.config import settings
-
-if TYPE_CHECKING:
-    from langgraph.checkpoint.base import BaseCheckpointSaver
 
 _checkpointer: BaseCheckpointSaver | None = None
 _exit_stack: AsyncExitStack | None = None

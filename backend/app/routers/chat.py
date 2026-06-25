@@ -1,4 +1,5 @@
 import json
+import logging
 
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
@@ -23,6 +24,8 @@ router = APIRouter(
     dependencies=[Depends(get_current_user)],
 )
 
+logger = logging.getLogger(__name__)
+
 
 def _sse_response(event_generator):
     return StreamingResponse(
@@ -40,13 +43,27 @@ def _sse_response(event_generator):
 async def chat(request: ChatRequest, current_user: User = Depends(get_current_user)):
     service = RAGService()
     user_id = str(current_user.id)
+    logger.info(
+        "chat start: session_id=%s user_id=%s message=%r",
+        request.session_id,
+        user_id,
+        request.message,
+    )
 
     async def event_generator():
         try:
             async for event in service.chat_stream(request.session_id, user_id, request.message):
+                if event.get("type") == "error":
+                    logger.error(
+                        "chat stream error event: session_id=%s message=%s",
+                        request.session_id,
+                        event.get("message"),
+                    )
                 yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
-        except Exception as e:
-            error_event = {"type": "error", "message": f"RAG 服务错误: {e}"}
+            logger.info("chat done: session_id=%s", request.session_id)
+        except Exception:
+            logger.exception("chat stream failed: session_id=%s user_id=%s", request.session_id, user_id)
+            error_event = {"type": "error", "message": "RAG 服务错误，请查看后端日志"}
             yield f"data: {json.dumps(error_event, ensure_ascii=False)}\n\n"
 
     return _sse_response(event_generator())

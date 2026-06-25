@@ -1,6 +1,9 @@
 import asyncio
 from contextvars import ContextVar
+import logging
 from typing import Annotated, Any, Literal, NotRequired
+
+from elasticsearch import NotFoundError
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from typing_extensions import TypedDict
@@ -15,6 +18,8 @@ from langchain.agents.middleware.types import (
 from langgraph.runtime import Runtime
 
 from app.services.retrieval_service import search_relevant_docs
+
+logger = logging.getLogger(__name__)
 
 BASE_SYSTEM_APPENDIX = (
     "你是基于文档内容的问答助手。优先使用检索到的文档内容回答；"
