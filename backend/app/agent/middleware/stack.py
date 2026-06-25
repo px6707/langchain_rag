@@ -97,7 +97,7 @@ def build_middleware_stack(llm: ChatOpenAI) -> list[AgentMiddleware[Any, Any, An
     if settings.openviking_enabled:
         stack.append(OpenVikingMemoryMiddleware())
 
-    stack.append(RetrievalMiddleware())
+    stack.append(RetrievalMiddleware(llm))
 
     if settings.todo_list_enabled:
         stack.append(TodoListMiddleware(system_prompt=TODO_SYSTEM_PROMPT_ZH))

@@ -2,90 +2,120 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
+    # 从 .env 加载环境变量；未识别的键忽略
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
-    llm_api_base: str = "https://api.openai.com/v1"
-    llm_api_key: str = ""
-    llm_model: str = "gpt-4o-mini"
+    # --- LLM（对话 Agent 主模型）---
+    llm_api_base: str = "https://api.openai.com/v1"  # Chat 模型 API 根地址（兼容 OpenAI 协议的服务）
+    llm_api_key: str = ""  # Chat 模型 API 密钥
+    llm_model: str = "gpt-4o-mini"  # Agent 对话使用的模型名称
 
-    embedding_api_base: str = "https://api.openai.com/v1"
-    embedding_api_key: str = ""
-    embedding_model: str = "text-embedding-3-small"
+    # --- Embedding（文档向量化与检索）---
+    embedding_api_base: str = "https://api.openai.com/v1"  # Embedding API 根地址
+    embedding_api_key: str = ""  # Embedding API 密钥
+    embedding_model: str = "text-embedding-3-small"  # 文档切块与检索用的向量模型
 
-    database_url: str = "postgresql+asyncpg://rag:rag@localhost:5433/rag"
-    checkpointer_database_url: str = "postgresql://rag:rag@localhost:5433/rag"
+    # --- 数据库 ---
+    database_url: str = "postgresql+asyncpg://rag:rag@localhost:5433/rag"  # 业务库连接串（asyncpg，用户/文档等）
+    checkpointer_database_url: str = "postgresql://rag:rag@localhost:5433/rag"  # LangGraph 会话 checkpoint 库（同步驱动）
 
-    es_url: str = "http://localhost:9200"
-    es_index: str = "rag_documents"
+    # --- Elasticsearch（向量 + 全文检索）---
+    es_url: str = "http://localhost:9200"  # Elasticsearch 集群地址
+    es_index: str = "rag_documents"  # 存放文档切片的索引名
 
-    upload_dir: str = "./uploads"
+    # --- 文档上传与切块 ---
+    upload_dir: str = "./uploads"  # 用户上传文件的本地存储目录
+    chunk_size: int = 500  # 文档切块时的目标字符数
+    chunk_overlap: int = 50  # 相邻切块之间的重叠字符数，减少边界信息丢失
 
-    chunk_size: int = 500
-    chunk_overlap: int = 50
-    retrieval_k: int = 4  # legacy; final k uses rerank_top_n
-    retrieval_score_threshold: float = 0.7
-    retrieval_hybrid_enabled: bool = True
-    retrieval_rrf_enabled: bool = True
-    retrieval_fetch_k: int = 20
-    rerank_enabled: bool = True
-    rerank_api_base: str = ""
-    rerank_api_key: str = ""
-    rerank_model: str = ""
-    rerank_top_n: int = 4
+    # --- 检索与 Rerank ---
+    retrieval_k: int = 4  # 遗留项；实际最终返回条数由 rerank_top_n 控制
+    retrieval_score_threshold: float = 0.7  # Rerank 分数阈值，低于此值的文档会被过滤
+    retrieval_hybrid_enabled: bool = True  # 是否启用 ES 混合检索（向量 + BM25）
+    retrieval_rrf_enabled: bool = True  # 混合检索时是否用 RRF 融合向量与 BM25 结果
+    retrieval_fetch_k: int = 20  # 启用 Rerank 时 ES 初召回条数（粗召回后再精排）
+    rerank_enabled: bool = True  # 是否启用 HTTP Rerank 精排
+    rerank_api_base: str = ""  # Rerank 服务地址；为空则回退 embedding_api_base
+    rerank_api_key: str = ""  # Rerank 服务密钥；为空则回退 embedding_api_key
+    rerank_model: str = ""  # Rerank 模型名；为空则跳过精排
+    rerank_top_n: int = 4  # Rerank 后保留的文档数；未启用 Rerank 时作为 ES 的 k
 
-    summarization_trigger_messages: int = 30
-    summarization_keep_messages: int = 15
+    # --- 检索路由与 Query 变换 ---
+    retrieval_routing_enabled: bool = True  # 是否启用 LLM 检索路由（闲聊/工具调用可跳过 ES）
+    retrieval_history_messages: int = 6  # 路由与多轮改写时可见的最近消息条数
+    retrieval_multi_query_count: int = 3  # multi_query 策略下额外生成的同义 query 数量上限
+    retrieval_max_sub_questions: int = 4  # decompose 策略下子问题数量上限
+    retrieval_router_temperature: float = 0.0  # 检索路由 LLM 的温度（建议 0 以保证稳定决策）
+    retrieval_router_tool_names: str = (  # 写入路由 prompt 的工具名列表，用于识别纯工具意图
+        "get_current_time,send_email,run_skill_script,load_skill,write_todos"
+    )
 
-    pii_enabled: bool = True
-    pii_types: str = "email,credit_card,ip"
-    pii_strategy: str = "redact"
+    # --- 对话历史压缩（SummarizationMiddleware）---
+    summarization_trigger_messages: int = 30  # 消息数超过此值时触发历史摘要
+    summarization_keep_messages: int = 15  # 摘要后保留的最近消息条数
 
-    hitl_enabled: bool = True
-    hitl_tools: str = "get_current_time,send_email,run_skill_script"
+    # --- PII 脱敏（PIIMiddleware）---
+    pii_enabled: bool = True  # 是否启用输入/输出 PII 检测与处理
+    pii_types: str = "email,credit_card,ip"  # 需检测的 PII 类型，逗号分隔
+    pii_strategy: str = "redact"  # PII 处理策略，如 redact（替换/遮盖）
 
-    smtp_host: str = "smtp.example.com"
-    smtp_port: int = 587
-    smtp_use_tls: bool = True
+    # --- 人工审批（HumanInTheLoopMiddleware）---
+    hitl_enabled: bool = True  # 是否对敏感工具调用启用人工审批
+    hitl_tools: str = "get_current_time,send_email,run_skill_script"  # 需要审批的工具名，逗号分隔
 
-    tool_retry_max_retries: int = 2
-    tool_retry_initial_delay: float = 1.0
+    # --- 邮件发送（send_email 工具）---
+    smtp_host: str = "smtp.example.com"  # SMTP 服务器主机名
+    smtp_port: int = 587  # SMTP 端口
+    smtp_use_tls: bool = True  # 是否使用 STARTTLS 加密连接
 
-    todo_list_enabled: bool = True
+    # --- 工具调用重试（ToolRetryMiddleware）---
+    tool_retry_max_retries: int = 2  # 工具失败后的最大重试次数
+    tool_retry_initial_delay: float = 1.0  # 首次重试前的等待秒数（指数退避起点）
 
-    skills_enabled: bool = True
-    skills_dir: str = "./skills"
-    skills_allowlist: str = ""
+    # --- 任务规划（TodoListMiddleware）---
+    todo_list_enabled: bool = True  # 是否启用 write_todos 多步骤任务规划
 
-    skill_script_enabled: bool = True
-    skill_script_timeout_seconds: int = 30
-    skill_script_max_timeout_seconds: int = 300
-    skill_script_max_output_bytes: int = 512_000
-    skill_script_max_file_bytes: int = 1_048_576
-    skill_script_allowed_extensions: str = ".py,.sh"
+    # --- Skills ---
+    skills_enabled: bool = True  # 是否启用 Skills 中间件与 load_skill 工具
+    skills_dir: str = "./skills"  # Skills 定义文件所在目录
+    skills_allowlist: str = ""  # 允许加载的 skill 名白名单，逗号分隔；空表示不限制
 
-    mcp_enabled: bool = True
-    mcp_servers_file: str = "./mcp_servers.json"
-    mcp_tool_allowlist: str = ""
+    # --- Skill 脚本执行（run_skill_script 工具）---
+    skill_script_enabled: bool = True  # 是否在 prompt 中暴露脚本执行能力
+    skill_script_timeout_seconds: int = 30  # 单次脚本执行的默认超时（秒）
+    skill_script_max_timeout_seconds: int = 300  # 允许请求的最大超时上限（秒）
+    skill_script_max_output_bytes: int = 512_000  # 脚本 stdout/stderr 最大捕获字节数
+    skill_script_max_file_bytes: int = 1_048_576  # 可读取的 skill 文件最大字节数
+    skill_script_allowed_extensions: str = ".py,.sh"  # 允许执行的脚本扩展名，逗号分隔
 
-    langsmith_tracing_enabled: bool = False
-    langsmith_api_key: str = ""
-    langsmith_project: str = "langchain-rag"
-    langsmith_endpoint: str = ""
+    # --- MCP 外部工具 ---
+    mcp_enabled: bool = True  # 是否加载 MCP 服务器提供的工具
+    mcp_servers_file: str = "./mcp_servers.json"  # MCP 服务器配置文件路径
+    mcp_tool_allowlist: str = ""  # MCP 工具名白名单，逗号分隔；空表示加载全部
 
-    jwt_secret: str = "change-me-in-production"
-    jwt_algorithm: str = "HS256"
-    jwt_expire_minutes: int = 60 * 24
+    # --- LangSmith 可观测性 ---
+    langsmith_tracing_enabled: bool = False  # 是否开启 LangSmith 链路追踪
+    langsmith_api_key: str = ""  # LangSmith API 密钥
+    langsmith_project: str = "langchain-rag"  # LangSmith 项目名称
+    langsmith_endpoint: str = ""  # 自定义 LangSmith API 端点；空则使用官方默认
 
-    admin_username: str = "admin"
-    admin_password: str = "admin123"
+    # --- JWT 认证 ---
+    jwt_secret: str = "change-me-in-production"  # JWT 签名密钥（生产环境务必修改）
+    jwt_algorithm: str = "HS256"  # JWT 签名算法
+    jwt_expire_minutes: int = 60 * 24  # 访问令牌有效期（分钟）
 
-    openviking_enabled: bool = False
-    openviking_path: str = "./openviking_data"
-    openviking_config_file: str = ""
-    openviking_account_id: str = "default"
-    openviking_find_limit: int = 5
-    openviking_find_score_threshold: float = 0.3
-    openviking_commit_every_messages: int = 20
+    # --- 初始管理员账号（首次启动/bootstrap 用）---
+    admin_username: str = "admin"  # 默认管理员用户名
+    admin_password: str = "admin123"  # 默认管理员密码
+
+    # --- OpenViking 长期记忆 ---
+    openviking_enabled: bool = False  # 是否启用 OpenViking 用户记忆检索与归档
+    openviking_path: str = "./openviking_data"  # OpenViking 本地数据目录
+    openviking_config_file: str = ""  # 可选 OpenViking 配置文件；空则仅用 path 初始化
+    openviking_account_id: str = "default"  # OpenViking 账户标识前缀
+    openviking_find_limit: int = 5  # 每次记忆检索返回条数上限
+    openviking_find_score_threshold: float = 0.3  # 记忆相似度分数阈值
+    openviking_commit_every_messages: int = 20  # 会话消息数达到此值时归档到长期记忆
 
 
 settings = Settings()

@@ -1,0 +1,12 @@
+from typing import Literal
+
+from pydantic import BaseModel, Field
+
+
+class RetrievalPlan(BaseModel):
+    action: Literal["skip", "retrieve"]
+    strategy: Literal["none", "multi_query", "hyde", "decompose"] = "none"
+    standalone_query: str = ""
+    extra_queries: list[str] = Field(default_factory=list)
+    hyde_document: str | None = None
+    reason: str = ""
