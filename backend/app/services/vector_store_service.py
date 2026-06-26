@@ -36,6 +36,27 @@ def _hit_to_document(hit: dict) -> Document:
     return Document(page_content=text, metadata=metadata)
 
 
+def get_chunk_by_ref(document_id: str, chunk_index: int) -> Document | None:
+    store = get_vector_store(use_hybrid=False)
+    client = store.client
+    response = client.search(
+        index=settings.es_index,
+        query={
+            "bool": {
+                "filter": [
+                    {"term": {"metadata.document_id.keyword": document_id}},
+                    {"term": {"metadata.chunk_index": chunk_index}},
+                ]
+            }
+        },
+        size=1,
+    )
+    hits = response.get("hits", {}).get("hits", [])
+    if not hits:
+        return None
+    return _hit_to_document(hits[0])
+
+
 def bm25_search(query: str, *, k: int) -> list[Document]:
     store = get_vector_store(use_hybrid=False)
     client = store.client

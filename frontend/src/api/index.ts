@@ -52,10 +52,34 @@ export interface DocumentListResponse {
   total: number
 }
 
+export interface DocumentChunk {
+  document_id: string
+  chunk_index: number
+  ref_id: string
+  filename: string
+  content: string
+}
+
 export interface SourceInfo {
+  document_id: string
+  chunk_index: number
+  ref_id: string
   filename: string
   content: string
   score?: number | null
+}
+
+export interface ClaimVerdict {
+  claim: string
+  supported: boolean
+  evidence_ref_ids: string[]
+  reason: string
+}
+
+export interface GroundingResult {
+  status: 'supported' | 'partial' | 'not_supported' | 'skipped'
+  supported_ratio: number
+  claims: ClaimVerdict[]
 }
 
 export interface ChatResponse {
@@ -110,6 +134,7 @@ export interface ChatMessage {
   role: string
   content: string
   sources?: SourceInfo[] | null
+  grounding?: GroundingResult | null
   tool_calls?: ToolCallInfo[] | null
   todos?: TodoItem[] | null
   created_at: string
@@ -144,6 +169,11 @@ export async function deleteDocument(id: string): Promise<void> {
   await api.delete(`/documents/${id}`)
 }
 
+export async function getDocumentChunk(docId: string, chunkIndex: number): Promise<DocumentChunk> {
+  const { data } = await api.get<DocumentChunk>(`/documents/${docId}/chunks/${chunkIndex}`)
+  return data
+}
+
 export type ChatStreamEvent =
   | { type: 'token'; content: string }
   | { type: 'tool_start'; id: string; name: string; args?: string | null }
@@ -151,6 +181,7 @@ export type ChatStreamEvent =
   | { type: 'hitl_request'; request: HITLRequest }
   | { type: 'todos_update'; todos: TodoItem[] }
   | { type: 'sources'; sources: SourceInfo[] }
+  | { type: 'grounding'; grounding: GroundingResult }
   | { type: 'done' }
   | { type: 'error'; message: string }
 
@@ -161,6 +192,7 @@ export interface ChatStreamHandlers {
   onHitlRequest?: (request: HITLRequest) => void
   onTodosUpdate?: (todos: TodoItem[]) => void
   onSources?: (sources: SourceInfo[]) => void
+  onGrounding?: (grounding: GroundingResult) => void
   onDone?: () => void
   onError?: (message: string) => void
 }
@@ -212,6 +244,8 @@ async function consumeChatStream(response: Response, handlers: ChatStreamHandler
         handlers.onTodosUpdate?.(event.todos)
       } else if (event.type === 'sources') {
         handlers.onSources?.(event.sources)
+      } else if (event.type === 'grounding') {
+        handlers.onGrounding?.(event.grounding)
       } else if (event.type === 'done') {
         handlers.onDone?.()
       } else if (event.type === 'error') {

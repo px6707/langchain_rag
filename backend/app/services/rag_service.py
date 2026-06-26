@@ -12,6 +12,7 @@ from app.agent.hitl_utils import extract_hitl_request
 from app.agent.message_utils import (
     convert_messages_to_history,
     extract_chunk_content,
+    extract_grounding_from_turn,
     extract_sources_from_turn,
     extract_tool_end_from_message,
     extract_tool_starts_from_message,
@@ -164,6 +165,13 @@ class RAGService:
         if state and state.values:
             messages = state.values.get("messages", [])
             message_sources = state.values.get("message_sources", {})
+            message_grounding = state.values.get("message_grounding", {})
+            grounding = extract_grounding_from_turn(messages, message_grounding)
+            if grounding:
+                yield {
+                    "type": "grounding",
+                    "grounding": grounding.model_dump(),
+                }
             sources = extract_sources_from_turn(messages, message_sources)
             yield {
                 "type": "sources",
@@ -233,6 +241,7 @@ class RAGService:
 
         messages = state.values.get("messages", [])
         message_sources = state.values.get("message_sources", {})
-        history = convert_messages_to_history(messages, message_sources)
+        message_grounding = state.values.get("message_grounding", {})
+        history = convert_messages_to_history(messages, message_sources, message_grounding)
         todos = self._extract_todos(state)
         return history, todos

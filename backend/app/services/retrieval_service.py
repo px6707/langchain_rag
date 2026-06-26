@@ -42,6 +42,17 @@ def _doc_score(doc: Document) -> float | None:
         return None
 
 
+def _doc_ref_id(doc: Document) -> tuple[str, int, str]:
+    document_id = str(doc.metadata.get("document_id", "unknown"))
+    chunk_index = doc.metadata.get("chunk_index")
+    if chunk_index is None:
+        chunk_index = 0
+    else:
+        chunk_index = int(chunk_index)
+    ref_id = f"{document_id}#{chunk_index}"
+    return document_id, chunk_index, ref_id
+
+
 def _build_sources_and_context(docs: list[Document]) -> tuple[list[SourceInfo], str | None]:
     if not docs:
         return [], None
@@ -49,17 +60,21 @@ def _build_sources_and_context(docs: list[Document]) -> tuple[list[SourceInfo], 
     sources: list[SourceInfo] = []
     context_parts: list[str] = []
     for doc in docs:
-        filename = doc.metadata.get("filename", "unknown")
+        filename = str(doc.metadata.get("filename", "unknown"))
+        document_id, chunk_index, ref_id = _doc_ref_id(doc)
         score = _doc_score(doc)
         sources.append(
             SourceInfo(
+                document_id=document_id,
+                chunk_index=chunk_index,
+                ref_id=ref_id,
                 filename=filename,
                 content=doc.page_content[:200],
                 score=score,
             )
         )
         score_text = f" | 相关度: {score:.3f}" if score is not None else ""
-        context_parts.append(f"[来源: {filename}{score_text}]\n{doc.page_content}")
+        context_parts.append(f"[{ref_id}] {filename}{score_text}\n{doc.page_content}")
 
     context = "\n\n---\n\n".join(context_parts)
     return sources, context
@@ -329,18 +344,19 @@ def search_with_plan(
     plan: RetrievalPlan,
     *,
     llm: BaseChatModel | None = None,
-) -> tuple[list[SourceInfo], str | None]:
+) -> tuple[list[SourceInfo], str | None, list[Document]]:
     if plan.action == "skip" or not plan.standalone_query.strip():
-        return [], None
+        return [], None, []
 
     plan = normalize_plan(plan)
     docs = _tiered_search(plan, llm=llm)
-    return _build_sources_and_context(docs)
+    sources, context = _build_sources_and_context(docs)
+    return sources, context, docs
 
 
-def search_relevant_docs(query: str) -> tuple[list[SourceInfo], str | None]:
+def search_relevant_docs(query: str) -> tuple[list[SourceInfo], str | None, list[Document]]:
     if not query.strip():
-        return [], None
+        return [], None, []
 
     plan = RetrievalPlan(
         action="retrieve",

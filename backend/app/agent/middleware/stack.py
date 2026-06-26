@@ -11,6 +11,7 @@ from langchain.agents.middleware import (
 from langchain.agents.middleware.types import AgentMiddleware
 from langchain_openai import ChatOpenAI
 
+from app.agent.middleware.grounding import GroundingMiddleware
 from app.agent.middleware.openviking import OpenVikingMemoryMiddleware
 from app.agent.middleware.retrieval import RetrievalMiddleware
 from app.agent.middleware.skills import SkillsMiddleware
@@ -85,6 +86,7 @@ def build_middleware_stack(llm: ChatOpenAI) -> list[AgentMiddleware[Any, Any, An
             )
 
     stack.append(RetrievalMiddleware(get_router_llm()))
+    stack.append(GroundingMiddleware())
 
     stack.append(
         SummarizationMiddleware(

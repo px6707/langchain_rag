@@ -133,5 +133,11 @@ class Settings(BaseSettings):
     openviking_find_score_threshold: float = 0.3  # 记忆相似度分数阈值
     openviking_commit_every_messages: int = 20  # 会话消息数达到此值时归档到长期记忆
 
+    # --- 答案 Grounding 校验 ---
+    grounding_enabled: bool = True  # 是否对生成答案做检索支撑校验
+    grounding_min_supported_ratio: float = 0.8  # 支持率低于此值标为 partial
+    grounding_fail_ratio: float = 0.5  # 支持率低于此值标为 not_supported
+    grounding_max_claims: int = 8  # 最多抽取 claim 数
+
 
 settings = Settings()

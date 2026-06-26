@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 
 from langchain_core.messages import AIMessage, AIMessageChunk, AnyMessage, HumanMessage, ToolMessage
 
-from app.schemas import SourceInfo, ToolCallInfo
+from app.schemas import GroundingResultResponse, SourceInfo, ToolCallInfo
 
 
 def extract_chunk_content(msg: AIMessageChunk) -> str:
@@ -187,9 +187,24 @@ def extract_sources_from_turn(
     return []
 
 
+def extract_grounding_from_turn(
+    messages: list[AnyMessage],
+    message_grounding: dict[str, dict] | None,
+) -> GroundingResultResponse | None:
+    if not message_grounding:
+        return None
+
+    for msg in reversed(messages):
+        if isinstance(msg, AIMessage) and msg.id and msg.id in message_grounding:
+            return GroundingResultResponse(**message_grounding[msg.id])
+
+    return None
+
+
 def convert_messages_to_history(
     messages: list[AnyMessage],
     message_sources: dict[str, list[dict]] | None = None,
+    message_grounding: dict[str, dict] | None = None,
 ) -> list[dict]:
     history: list[dict] = []
     turn_messages: list[AnyMessage] = []
@@ -202,6 +217,7 @@ def convert_messages_to_history(
         content = ""
         assistant_id = str(uuid.uuid4())
         sources: list[SourceInfo] | None = None
+        grounding: GroundingResultResponse | None = None
         tool_calls = _aggregate_tool_calls(turn_messages)
 
         for msg in turn_messages:
@@ -226,6 +242,9 @@ def convert_messages_to_history(
                 if msg.id and message_sources and msg.id in message_sources:
                     sources = [SourceInfo(**s) for s in message_sources[msg.id]]
 
+                if msg.id and message_grounding and msg.id in message_grounding:
+                    grounding = GroundingResultResponse(**message_grounding[msg.id])
+
         if not content and not tool_calls:
             turn_messages = []
             return
@@ -235,6 +254,7 @@ def convert_messages_to_history(
             "role": "assistant",
             "content": content,
             "sources": sources,
+            "grounding": grounding,
             "tool_calls": tool_calls or None,
             "created_at": datetime.now(timezone.utc),
         })

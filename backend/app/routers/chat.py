@@ -116,6 +116,7 @@ async def get_history(
             role=msg["role"],
             content=msg["content"],
             sources=msg.get("sources"),
+            grounding=msg.get("grounding"),
             tool_calls=msg.get("tool_calls"),
             created_at=msg.get("created_at"),
         )

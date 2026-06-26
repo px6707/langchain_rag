@@ -65,6 +65,9 @@ async def process_document_task(doc_id: uuid.UUID) -> None:
             if not chunks:
                 raise ValueError("No content extracted from document")
 
+            for i, chunk in enumerate(chunks):
+                chunk.metadata["chunk_index"] = i
+
             vector_store = get_vector_store()
             vector_store.add_documents(chunks)
 

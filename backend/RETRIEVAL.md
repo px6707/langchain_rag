@@ -37,6 +37,38 @@ Hybrid search requires BM25 on the `text` field. If you enabled hybrid on an old
 
 If hybrid search fails at runtime, the service **falls back to vector-only** search and logs the error.
 
+## Citation format `[document_id#chunk_index]`
+
+Each indexed chunk stores `document_id` and `chunk_index` in ES metadata. Retrieved context is injected as:
+
+```text
+[550e8400-e29b-41d4-a716-446655440000#2] report.pdf
+chunk text...
+```
+
+The chat model is instructed to cite facts using the same `[document_id#chunk_index]` markers. The frontend renders these as clickable links that open the chunk in a drawer (`GET /api/documents/{doc_id}/chunks/{chunk_index}`).
+
+**Legacy indexes** without `chunk_index` need re-upload after enabling this feature.
+
+## Grounding validation
+
+After each answer (when retrieval ran), the router LLM judges whether factual claims are supported by retrieved chunks. Results are sent as SSE `grounding` events and shown as badges in the UI (answer text is not modified).
+
+```env
+GROUNDING_ENABLED=true
+GROUNDING_MIN_SUPPORTED_RATIO=0.8
+GROUNDING_FAIL_RATIO=0.5
+GROUNDING_MAX_CLAIMS=8
+```
+
+Status mapping:
+
+- `supported_ratio >= GROUNDING_MIN_SUPPORTED_RATIO` → supported (green)
+- `>= GROUNDING_FAIL_RATIO` → partial (orange)
+- otherwise → not_supported (red)
+
+Uses the same router LLM as retrieval routing (`ROUTER_LLM_*` or fallback to main `LLM_*`).
+
 ## API format
 
 Rerank endpoint expects:

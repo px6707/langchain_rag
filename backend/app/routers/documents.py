@@ -6,8 +6,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth.dependencies import get_current_user
 from app.database import get_db
 from app.models import User
-from app.schemas import DocumentListResponse, DocumentResponse
+from app.schemas import DocumentChunkResponse, DocumentListResponse, DocumentResponse
 from app.services.document_service import ALLOWED_EXTENSIONS, DocumentService, process_document_task
+from app.services.vector_store_service import get_chunk_by_ref
 
 router = APIRouter(
     prefix="/api/documents",
@@ -51,6 +52,27 @@ async def list_documents(
     service = DocumentService(db)
     items, total = await service.list_documents(skip=skip, limit=limit)
     return DocumentListResponse(items=items, total=total)
+
+
+@router.get("/{doc_id}/chunks/{chunk_index}", response_model=DocumentChunkResponse)
+async def get_document_chunk(doc_id: UUID, chunk_index: int):
+    if chunk_index < 0:
+        raise HTTPException(status_code=400, detail="chunk_index must be non-negative")
+
+    doc = get_chunk_by_ref(str(doc_id), chunk_index)
+    if doc is None:
+        raise HTTPException(status_code=404, detail="Chunk not found")
+
+    document_id = str(doc.metadata.get("document_id", doc_id))
+    filename = str(doc.metadata.get("filename", "unknown"))
+    ref_id = f"{document_id}#{chunk_index}"
+    return DocumentChunkResponse(
+        document_id=document_id,
+        chunk_index=chunk_index,
+        ref_id=ref_id,
+        filename=filename,
+        content=doc.page_content,
+    )
 
 
 @router.delete("/{doc_id}")

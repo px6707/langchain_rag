@@ -78,7 +78,51 @@
               </el-collapse>
             </div>
 
-            <p v-if="msg.content" class="whitespace-pre-wrap">{{ msg.content }}</p>
+            <div
+              v-if="msg.role === 'assistant' && msg.grounding && msg.grounding.status !== 'skipped'"
+              class="mb-2"
+            >
+              <el-popover placement="top" :width="360" trigger="hover">
+                <template #reference>
+                  <el-tag :type="groundingTagType(msg.grounding.status)" size="small">
+                    {{ groundingLabel(msg.grounding.status) }}
+                  </el-tag>
+                </template>
+                <div class="space-y-2 text-sm">
+                  <p class="text-gray-600">
+                    支持率: {{ (msg.grounding.supported_ratio * 100).toFixed(0) }}%
+                  </p>
+                  <ul class="space-y-2">
+                    <li
+                      v-for="(claim, claimIdx) in msg.grounding.claims"
+                      :key="claimIdx"
+                      class="border-b border-gray-100 pb-2 last:border-0"
+                    >
+                      <div class="flex items-center gap-2 mb-1">
+                        <el-tag
+                          :type="claim.supported ? 'success' : 'danger'"
+                          size="small"
+                        >
+                          {{ claim.supported ? '已支撑' : '未支撑' }}
+                        </el-tag>
+                        <span v-if="claim.evidence_ref_ids.length" class="text-xs text-gray-400">
+                          {{ claim.evidence_ref_ids.join(', ') }}
+                        </span>
+                      </div>
+                      <p class="text-gray-800">{{ claim.claim }}</p>
+                      <p v-if="claim.reason" class="text-xs text-gray-500 mt-1">{{ claim.reason }}</p>
+                    </li>
+                  </ul>
+                </div>
+              </el-popover>
+            </div>
+
+            <CitationText
+              v-if="msg.content && msg.role === 'assistant'"
+              :content="msg.content"
+              @cite-click="openChunkDrawer"
+            />
+            <p v-else-if="msg.content" class="whitespace-pre-wrap">{{ msg.content }}</p>
 
             <div
               v-if="msg.role === 'assistant' && msg.sources?.length"
@@ -91,7 +135,14 @@
                   :key="idx"
                   class="text-xs bg-gray-50 rounded p-2 text-gray-600"
                 >
-                  <span class="font-medium text-blue-600">{{ source.filename }}</span>
+                  <button
+                    type="button"
+                    class="font-medium text-blue-600 hover:text-blue-800 underline font-mono"
+                    @click="openChunkDrawer(source.document_id, source.chunk_index, source.ref_id)"
+                  >
+                    [{{ source.ref_id }}]
+                  </button>
+                  <span class="ml-2">{{ source.filename }}</span>
                   <span v-if="source.score != null" class="ml-2 text-gray-400">
                     ({{ source.score.toFixed(3) }})
                   </span>
@@ -206,6 +257,14 @@
         </template>
       </template>
     </el-dialog>
+
+    <el-drawer v-model="chunkDrawerVisible" :title="chunkDrawerTitle" size="40%">
+      <div v-loading="chunkDrawerLoading" class="min-h-[120px]">
+        <p v-if="chunkDrawerFilename" class="text-sm text-gray-500 mb-3">{{ chunkDrawerFilename }}</p>
+        <p v-if="chunkDrawerRefId" class="text-xs font-mono text-blue-600 mb-3">[{{ chunkDrawerRefId }}]</p>
+        <p class="whitespace-pre-wrap text-gray-800">{{ chunkDrawerContent }}</p>
+      </div>
+    </el-drawer>
   </div>
 </template>
 
@@ -214,13 +273,16 @@ import { computed, nextTick, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { ChatDotRound, Loading } from '@element-plus/icons-vue'
 import AppHeader from '@/components/AppHeader.vue'
+import CitationText from '@/components/CitationText.vue'
 import {
   getChatHistory,
+  getDocumentChunk,
   getPendingInterrupt,
   resumeChatStream,
   sendChatStream,
   type ChatMessage,
   type ChatStreamHandlers,
+  type GroundingResult,
   type HITLDecision,
   type HITLRequest,
   type SendEmailArgs,
@@ -247,6 +309,12 @@ const emailForm = ref<SendEmailArgs>({
   smtp_user: '',
   smtp_password: '',
 })
+const chunkDrawerVisible = ref(false)
+const chunkDrawerLoading = ref(false)
+const chunkDrawerTitle = ref('文档片段')
+const chunkDrawerFilename = ref('')
+const chunkDrawerRefId = ref('')
+const chunkDrawerContent = ref('')
 
 const isSendEmailHitl = computed(
   () => pendingHitlRequest.value?.action_requests[0]?.name === 'send_email',
@@ -261,6 +329,53 @@ const isEmailFormValid = computed(() =>
     && emailForm.value.smtp_password.trim(),
   ),
 )
+
+function groundingLabel(status: GroundingResult['status']): string {
+  if (status === 'supported') return '内容已校验'
+  if (status === 'partial') return '部分未支撑'
+  if (status === 'not_supported') return '可能缺乏依据'
+  return '未校验'
+}
+
+function groundingTagType(status: GroundingResult['status']): 'success' | 'warning' | 'danger' | 'info' {
+  if (status === 'supported') return 'success'
+  if (status === 'partial') return 'warning'
+  if (status === 'not_supported') return 'danger'
+  return 'info'
+}
+
+async function openChunkDrawer(docId: string, chunkIndex: number, refId: string) {
+  chunkDrawerVisible.value = true
+  chunkDrawerLoading.value = true
+  chunkDrawerTitle.value = '文档片段'
+  chunkDrawerFilename.value = ''
+  chunkDrawerRefId.value = refId
+  chunkDrawerContent.value = ''
+
+  const msg = messages.value.find((m) =>
+    m.sources?.some((s) => s.ref_id === refId),
+  )
+  const preview = msg?.sources?.find((s) => s.ref_id === refId)
+  if (preview) {
+    chunkDrawerFilename.value = preview.filename
+    chunkDrawerContent.value = preview.content
+  }
+
+  try {
+    const chunk = await getDocumentChunk(docId, chunkIndex)
+    chunkDrawerFilename.value = chunk.filename
+    chunkDrawerRefId.value = chunk.ref_id
+    chunkDrawerContent.value = chunk.content
+    chunkDrawerTitle.value = chunk.filename
+  } catch {
+    if (!chunkDrawerContent.value) {
+      ElMessage.error('无法加载文档片段')
+      chunkDrawerVisible.value = false
+    }
+  } finally {
+    chunkDrawerLoading.value = false
+  }
+}
 
 function truncateOutput(output: string, maxLen = 500): string {
   return output.length > maxLen ? `${output.slice(0, maxLen)}...` : output
@@ -370,6 +485,12 @@ function createStreamHandlers(assistantId: string): ChatStreamHandlers {
       const msg = messages.value.find((m) => m.id === assistantId)
       if (msg) {
         msg.sources = sources
+      }
+    },
+    onGrounding: (grounding) => {
+      const msg = messages.value.find((m) => m.id === assistantId)
+      if (msg) {
+        msg.grounding = grounding
       }
     },
   }

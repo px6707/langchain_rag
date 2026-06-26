@@ -60,6 +60,14 @@ class DocumentListResponse(BaseModel):
     total: int
 
 
+class DocumentChunkResponse(BaseModel):
+    document_id: str
+    chunk_index: int
+    ref_id: str
+    filename: str
+    content: str
+
+
 class ChatRequest(BaseModel):
     session_id: str = Field(..., min_length=1)
     message: str = Field(..., min_length=1)
@@ -102,9 +110,25 @@ class ChatInterruptResponse(BaseModel):
 
 
 class SourceInfo(BaseModel):
+    document_id: str
+    chunk_index: int
+    ref_id: str
     filename: str
     content: str
     score: float | None = None
+
+
+class ClaimVerdictResponse(BaseModel):
+    claim: str
+    supported: bool
+    evidence_ref_ids: list[str]
+    reason: str
+
+
+class GroundingResultResponse(BaseModel):
+    status: Literal["supported", "partial", "not_supported", "skipped"]
+    supported_ratio: float
+    claims: list[ClaimVerdictResponse]
 
 
 class ToolCallInfo(BaseModel):
@@ -125,6 +149,7 @@ class ChatMessageResponse(BaseModel):
     role: str
     content: str
     sources: list[SourceInfo] | None = None
+    grounding: GroundingResultResponse | None = None
     tool_calls: list[ToolCallInfo] | None = None
     created_at: datetime | None = None
 
