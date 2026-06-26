@@ -18,6 +18,7 @@ from app.agent.checkpointer import close_checkpointer, init_checkpointer
 from app.agent.factory import build_agent
 from app.auth.seed import ensure_seed_admin
 from app.database import Base, engine, get_db
+from app import models as _models  # noqa: F401 — register ORM tables
 from app.mcp.loader import close_mcp, get_mcp_status, init_mcp
 from app.openviking.client import close_openviking, get_openviking_status, init_openviking
 from app.routers import admin, auth, chat, documents

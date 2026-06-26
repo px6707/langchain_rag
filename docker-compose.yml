@@ -21,6 +21,23 @@ services:
     volumes:
       - es_data:/usr/share/elasticsearch/data
 
+  parse-worker:
+    image: python:3.12-slim
+    working_dir: /app
+    volumes:
+      - ./backend:/app
+      - ./backend/uploads:/app/uploads
+    env_file:
+      - ./backend/.env
+    depends_on:
+      - postgres
+      - elasticsearch
+    command: >
+      bash -c "apt-get update && apt-get install -y ffmpeg &&
+      pip install -q -r requirements.txt &&
+      python -m app.worker.parse_worker"
+
 volumes:
   postgres_data:
   es_data:
+

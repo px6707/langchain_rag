@@ -11,7 +11,7 @@
           drag
           :auto-upload="false"
           :show-file-list="false"
-          accept=".pdf,.txt,.md,.docx"
+          accept=".pdf,.txt,.md,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.png,.jpg,.jpeg,.webp,.gif,.bmp,.tiff,.mp3,.wav,.m4a,.aac,.ogg,.flac,.mp4,.mkv,.mov,.webm"
           :on-change="handleFileChange"
         >
           <el-icon class="el-icon--upload" :size="48"><UploadFilled /></el-icon>
@@ -20,7 +20,7 @@
           </div>
           <template #tip>
             <div class="el-upload__tip text-gray-500">
-              支持 PDF、TXT、Markdown、DOCX 格式，单文件最大 20MB
+              支持 PDF、Office、图片、音频、视频等；单文件最大 200MB。上传后立即返回，后台队列解析。
             </div>
           </template>
         </el-upload>
@@ -41,7 +41,7 @@
           <el-table-column label="状态" width="100">
             <template #default="{ row }">
               <el-tag :type="statusType(row.status)" size="small">
-                {{ statusLabel(row.status) }}
+                {{ statusLabel(row.status, row.parse_stage) }}
               </el-tag>
             </template>
           </el-table-column>
@@ -109,7 +109,7 @@ async function handleFileChange(uploadFile: UploadFile) {
 
   try {
     await uploadDocument(uploadFile.raw)
-    ElMessage.success('上传成功，正在处理文档...')
+    ElMessage.success('上传成功，已加入解析队列')
     await fetchDocuments()
     startPolling()
   } catch {
@@ -131,7 +131,9 @@ function startPolling() {
   if (pollTimer) return
   pollTimer = setInterval(async () => {
     await fetchDocuments()
-    const hasProcessing = documents.value.some((d) => d.status === 'processing')
+    const hasProcessing = documents.value.some(
+      (d) => d.status === 'queued' || d.status === 'processing',
+    )
     if (!hasProcessing && pollTimer) {
       clearInterval(pollTimer)
       pollTimer = null

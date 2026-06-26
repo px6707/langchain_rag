@@ -33,6 +33,41 @@ class Settings(BaseSettings):
     upload_dir: str = "./uploads"  # 用户上传文件的本地存储目录
     chunk_size: int = 500  # 文档切块时的目标字符数
     chunk_overlap: int = 50  # 相邻切块之间的重叠字符数，减少边界信息丢失
+    parse_max_file_mb: int = 200  # 单文件上传上限（MB，对齐 MinerU 云端）
+    parse_worker_poll_sec: float = 2.0  # Worker 拉取队列间隔（秒）
+    parse_max_attempts: int = 3  # 解析失败最大重试次数
+    parse_job_stale_timeout_sec: int = 7200  # running 超时回收（秒），应 >= MINERU_POLL_TIMEOUT_SEC
+    table_chunk_rows: int = 8  # 表格分块时每 chunk 数据行数
+    chunking_config_path: str = "./chunking_config.yaml"
+    index_delete_retry_attempts: int = 3
+
+    # --- MinerU 云端解析 ---
+    mineru_api_base: str = "https://mineru.net"
+    mineru_api_token: str = ""
+    mineru_model_version: str = "vlm"  # pipeline / vlm / MinerU-HTML
+    mineru_poll_interval_sec: float = 5.0
+    mineru_poll_timeout_sec: int = 3600
+
+    # --- ASR（OpenAI 兼容 /v1/audio/transcriptions）---
+    asr_api_base: str = ""
+    asr_api_key: str = ""
+    asr_model: str = "whisper-1"
+    asr_use_verbose_json: bool = True
+    asr_fallback_segment_sec: int = 120
+
+    # --- VLM 视觉摘要 ---
+    vlm_api_base: str = ""
+    vlm_api_key: str = ""
+    vlm_model: str = ""
+
+    # --- 视频处理 ---
+    video_frame_mode: str = "scene"  # scene | interval
+    video_scene_threshold: float = 0.3
+    video_frame_interval_sec: float = 30.0  # interval 模式抽帧间隔（秒）
+    video_max_frames: int = 60  # 最大抽帧数
+    video_frame_concurrency: int = 4
+    video_dedupe_enabled: bool = True
+    video_dedupe_hamming_threshold: int = 5
 
     # --- 检索与 Rerank ---
     retrieval_k: int = 4  # 遗留项；实际最终返回条数由 rerank_top_n 控制
@@ -67,6 +102,8 @@ class Settings(BaseSettings):
     retrieval_fallback_k_multiplier: float = 2.0  # 分级 fallback 最后一级 k 放大倍数
     retrieval_fallback_max_tiers: int = 4  # 分级 fallback 最大 tier 数
     retrieval_hyde_min_score: float = 0.3  # HyDE 假设文档与 query 的 embedding 相似度下限
+    retrieval_page_expand_enabled: bool = True  # 粗召回后扩展同 document_id + page_number 的 sibling chunk
+    retrieval_page_expand_max_chunks: int = 32  # 每页扩展最多拉取的 chunk 数
 
     # --- 对话历史压缩（SummarizationMiddleware）---
     summarization_trigger_messages: int = 30  # 消息数超过此值时触发历史摘要

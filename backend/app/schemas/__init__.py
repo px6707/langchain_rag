@@ -49,6 +49,7 @@ class DocumentResponse(BaseModel):
     file_type: str
     chunk_count: int
     status: str
+    parse_stage: str | None = None
     error_message: str | None = None
     created_at: datetime
 

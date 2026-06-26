@@ -28,9 +28,11 @@ cp .env.example backend/.env
 
 ### 3. 启动后端
 
+需要 **Python 3.12**（与 parse-worker Docker 镜像一致，`office-oxide` 需此版本）。
+
 ```bash
 cd backend
-python -m venv venv
+python3.12 -m venv venv
 source venv/bin/activate  # Windows: venv\Scripts\activate
 pip install -r requirements.txt
 uvicorn app.main:app --reload --port 8000

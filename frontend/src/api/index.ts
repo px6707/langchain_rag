@@ -43,6 +43,7 @@ export interface Document {
   file_type: string
   chunk_count: number
   status: string
+  parse_stage?: string | null
   error_message?: string | null
   created_at: string
 }

@@ -1,84 +1,19 @@
+import logging
 import os
 import uuid
 from pathlib import Path
 
-from langchain_community.document_loaders import Docx2txtLoader, PyPDFLoader, TextLoader
-from langchain_core.documents import Document as LCDocument
-from langchain_text_splitters import RecursiveCharacterTextSplitter
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.models import Document
-from app.services.vector_store_service import get_vector_store
+from app.models import Document, ParseJob
+from app.parsing.file_validation import validate_upload
+from app.parsing.router import get_file_type_label
+from app.services.parse_job_service import enqueue_parse_job, enqueue_reparse
+from app.services.vector_store_service import delete_document_vectors, get_vector_store
 
-ALLOWED_EXTENSIONS = {".pdf", ".txt", ".md", ".docx"}
-
-
-def _get_file_type(filename: str) -> str:
-    ext = Path(filename).suffix.lower()
-    if ext == ".pdf":
-        return "pdf"
-    if ext in {".txt", ".md"}:
-        return ext.lstrip(".")
-    if ext == ".docx":
-        return "docx"
-    raise ValueError(f"Unsupported file type: {ext}")
-
-
-def _load_document(file_path: str, file_type: str) -> list[LCDocument]:
-    if file_type == "pdf":
-        loader = PyPDFLoader(file_path)
-    elif file_type in {"txt", "md"}:
-        loader = TextLoader(file_path, encoding="utf-8")
-    elif file_type == "docx":
-        loader = Docx2txtLoader(file_path)
-    else:
-        raise ValueError(f"Unsupported file type: {file_type}")
-    return loader.load()
-
-
-def _split_documents(docs: list[LCDocument]) -> list[LCDocument]:
-    splitter = RecursiveCharacterTextSplitter(
-        chunk_size=settings.chunk_size,
-        chunk_overlap=settings.chunk_overlap,
-    )
-    return splitter.split_documents(docs)
-
-
-async def process_document_task(doc_id: uuid.UUID) -> None:
-    from app.database import async_session
-
-    async with async_session() as session:
-        result = await session.execute(select(Document).where(Document.id == doc_id))
-        doc = result.scalar_one_or_none()
-        if not doc:
-            return
-
-        try:
-            raw_docs = _load_document(doc.file_path, doc.file_type)
-            for d in raw_docs:
-                d.metadata["document_id"] = str(doc.id)
-                d.metadata["filename"] = doc.filename
-
-            chunks = _split_documents(raw_docs)
-            if not chunks:
-                raise ValueError("No content extracted from document")
-
-            for i, chunk in enumerate(chunks):
-                chunk.metadata["chunk_index"] = i
-
-            vector_store = get_vector_store()
-            vector_store.add_documents(chunks)
-
-            doc.chunk_count = len(chunks)
-            doc.status = "completed"
-            doc.error_message = None
-        except Exception as e:
-            doc.status = "failed"
-            doc.error_message = str(e)
-
-        await session.commit()
+logger = logging.getLogger(__name__)
 
 
 class DocumentService:
@@ -89,11 +24,13 @@ class DocumentService:
         upload_dir = Path(settings.upload_dir)
         upload_dir.mkdir(parents=True, exist_ok=True)
 
-        file_type = _get_file_type(filename)
-        doc_id = uuid.uuid4()
-        safe_filename = f"{doc_id}{Path(filename).suffix}"
-        file_path = upload_dir / safe_filename
+        validate_upload(filename, content)
 
+        ext = Path(filename).suffix.lower()
+        file_type = get_file_type_label(filename)
+        doc_id = uuid.uuid4()
+        safe_filename = f"{doc_id}{ext}"
+        file_path = upload_dir / safe_filename
         file_path.write_bytes(content)
 
         doc = Document(
@@ -101,11 +38,30 @@ class DocumentService:
             filename=filename,
             file_path=str(file_path),
             file_type=file_type,
-            status="processing",
+            status="queued",
+            parse_stage="queued",
         )
         self.db.add(doc)
         await self.db.commit()
         await self.db.refresh(doc)
+        await enqueue_parse_job(self.db, doc.id)
+        return doc
+
+    async def reparse_document(self, doc_id: uuid.UUID) -> Document | None:
+        doc = await self.get_document(doc_id)
+        if not doc:
+            return None
+        if not os.path.exists(doc.file_path):
+            raise ValueError("Document file no longer exists on disk")
+
+        delete_document_vectors(str(doc_id))
+        doc.status = "queued"
+        doc.parse_stage = "queued"
+        doc.error_message = None
+        doc.chunk_count = 0
+        await self.db.commit()
+        await self.db.refresh(doc)
+        await enqueue_reparse(self.db, doc.id)
         return doc
 
     async def list_documents(self, skip: int = 0, limit: int = 20) -> tuple[list[Document], int]:
@@ -128,11 +84,12 @@ class DocumentService:
             return False
 
         vector_store = get_vector_store()
-        vector_store.delete(filter={"term": {"metadata.document_id.keyword": str(doc_id)}})
+        delete_document_vectors(str(doc_id))
 
         if os.path.exists(doc.file_path):
             os.remove(doc.file_path)
 
+        await self.db.execute(delete(ParseJob).where(ParseJob.document_id == doc_id))
         await self.db.execute(delete(Document).where(Document.id == doc_id))
         await self.db.commit()
         return True

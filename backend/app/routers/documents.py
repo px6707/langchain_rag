@@ -1,13 +1,15 @@
 from uuid import UUID
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import get_current_user
+from app.config import settings
 from app.database import get_db
 from app.models import User
+from app.parsing.router import ALLOWED_EXTENSIONS
 from app.schemas import DocumentChunkResponse, DocumentListResponse, DocumentResponse
-from app.services.document_service import ALLOWED_EXTENSIONS, DocumentService, process_document_task
+from app.services.document_service import DocumentService
 from app.services.vector_store_service import get_chunk_by_ref
 
 router = APIRouter(
@@ -19,7 +21,6 @@ router = APIRouter(
 
 @router.post("/upload", response_model=DocumentResponse)
 async def upload_document(
-    background_tasks: BackgroundTasks,
     file: UploadFile,
     db: AsyncSession = Depends(get_db),
 ):
@@ -30,16 +31,22 @@ async def upload_document(
     if ext not in ALLOWED_EXTENSIONS:
         raise HTTPException(
             status_code=400,
-            detail=f"Unsupported file type. Allowed: {', '.join(ALLOWED_EXTENSIONS)}",
+            detail=f"Unsupported file type. Allowed: {', '.join(sorted(ALLOWED_EXTENSIONS))}",
         )
 
     content = await file.read()
-    if len(content) > 20 * 1024 * 1024:
-        raise HTTPException(status_code=400, detail="File too large (max 20MB)")
+    max_bytes = settings.parse_max_file_mb * 1024 * 1024
+    if len(content) > max_bytes:
+        raise HTTPException(
+            status_code=400,
+            detail=f"File too large (max {settings.parse_max_file_mb}MB)",
+        )
 
     service = DocumentService(db)
-    doc = await service.save_upload(file.filename, content)
-    background_tasks.add_task(process_document_task, doc.id)
+    try:
+        doc = await service.save_upload(file.filename, content)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return doc
 
 
@@ -73,6 +80,18 @@ async def get_document_chunk(doc_id: UUID, chunk_index: int):
         filename=filename,
         content=doc.page_content,
     )
+
+
+@router.post("/{doc_id}/reparse", response_model=DocumentResponse)
+async def reparse_document(doc_id: UUID, db: AsyncSession = Depends(get_db)):
+    service = DocumentService(db)
+    try:
+        doc = await service.reparse_document(doc_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if doc is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+    return doc
 
 
 @router.delete("/{doc_id}")

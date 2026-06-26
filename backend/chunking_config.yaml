@@ -1,0 +1,12 @@
+strategies:
+  default: recursive_character
+  text: recursive_character
+  table: row_split_header_repeat
+  html_table: html_row_split
+  audio_transcript: segment_preserve
+
+overrides:
+  chunk_size: 500
+  chunk_overlap: 50
+  table_chunk_rows: 8
+  table_caption_max_chars: 200
