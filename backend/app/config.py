@@ -10,6 +10,12 @@ class Settings(BaseSettings):
     llm_api_key: str = ""  # Chat 模型 API 密钥
     llm_model: str = "gpt-4o-mini"  # Agent 对话使用的模型名称
 
+    # --- 小模型（检索路由、query 改写、grounding 校验等辅助任务）---
+    small_llm_api_base: str = ""  # 小模型 API 地址；空则回退 llm_api_base
+    small_llm_api_key: str = ""  # 小模型 API 密钥；空则回退 llm_api_key
+    small_llm_model: str = ""  # 小模型名称；空则回退 llm_model
+    small_llm_temperature: float = 0.0  # 小模型默认温度（建议 0 以保证稳定输出）
+
     # --- Embedding（文档向量化与检索）---
     embedding_api_base: str = "https://api.openai.com/v1"  # Embedding API 根地址
     embedding_api_key: str = ""  # Embedding API 密钥
@@ -45,13 +51,9 @@ class Settings(BaseSettings):
     retrieval_history_messages: int = 6  # 路由与多轮改写时可见的最近消息条数
     retrieval_multi_query_count: int = 3  # multi_query 策略下额外生成的同义 query 数量上限
     retrieval_max_sub_questions: int = 4  # decompose 策略下子问题数量上限
-    retrieval_router_temperature: float = 0.0  # 检索路由 LLM 的温度（建议 0 以保证稳定决策）
     retrieval_router_tool_names: str = (  # 写入路由 prompt 的工具名列表，用于识别纯工具意图
         "get_current_time,send_email,run_skill_script,load_skill,write_todos"
     )
-    router_llm_api_base: str = ""  # 检索路由/改写专用 LLM API 地址；空则回退 llm_api_base
-    router_llm_api_key: str = ""  # 检索路由/改写专用 LLM 密钥；空则回退 llm_api_key
-    router_llm_model: str = ""  # 检索路由/改写专用模型；空则回退 llm_model
     retrieval_empty_fallback_enabled: bool = True  # none 策略零结果时自动升级为 multi_query 重试
     retrieval_tool_context_max_chars: int = 500  # 路由历史中 ToolMessage 内容截断长度
     retrieval_per_query_k_min: int = 5  # 多 query 时每路召回 k 的下限

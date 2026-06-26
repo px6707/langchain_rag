@@ -16,7 +16,7 @@ from app.agent.middleware.openviking import OpenVikingMemoryMiddleware
 from app.agent.middleware.retrieval import RetrievalMiddleware
 from app.agent.middleware.skills import SkillsMiddleware
 from app.config import settings
-from app.services.llm_service import get_router_llm
+from app.services.llm_service import get_small_llm
 
 TODO_SYSTEM_PROMPT_ZH = """## write_todos 任务规划
 
@@ -85,7 +85,7 @@ def build_middleware_stack(llm: ChatOpenAI) -> list[AgentMiddleware[Any, Any, An
                 )
             )
 
-    stack.append(RetrievalMiddleware(get_router_llm()))
+    stack.append(RetrievalMiddleware(get_small_llm()))
     stack.append(GroundingMiddleware())
 
     stack.append(

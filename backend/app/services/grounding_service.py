@@ -5,7 +5,7 @@ from langchain_core.documents import Document
 from pydantic import BaseModel, Field
 
 from app.config import settings
-from app.services.llm_service import get_router_llm
+from app.services.llm_service import get_small_llm
 from app.services.retrieval_service import _doc_ref_id
 
 logger = logging.getLogger(__name__)
@@ -84,7 +84,7 @@ def validate_grounding(answer: str, chunks: list[Document]) -> GroundingResult:
     )
 
     try:
-        model = get_router_llm()
+        model = get_small_llm()
         structured = model.with_structured_output(GroundingJudgeOutput)
         raw = structured.invoke(
             [

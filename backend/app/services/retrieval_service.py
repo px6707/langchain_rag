@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 from app.config import settings
 from app.schemas import SourceInfo
 from app.schemas.retrieval import RetrievalPlan
-from app.services.llm_service import get_router_llm
+from app.services.llm_service import get_small_llm
 from app.services.rerank_service import get_rerank_compressor
 from app.services.retrieval_fusion import rrf_fuse
 from app.services.retrieval_validator import normalize_plan
@@ -270,7 +270,7 @@ def _run_unified_pipeline(
 
 
 def _fallback_extra_queries(plan: RetrievalPlan, *, llm: BaseChatModel | None = None) -> list[str]:
-    model = llm or get_router_llm()
+    model = llm or get_small_llm()
     structured = model.with_structured_output(FallbackQueries)
     prompt = (
         f"为以下检索问题生成 2 条不同表述的同义 query，用于扩大召回。\n"

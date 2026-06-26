@@ -54,7 +54,7 @@ def test_validate_grounding_supported():
         patch.object(settings, "grounding_enabled", True),
         patch.object(settings, "grounding_min_supported_ratio", 0.8),
         patch.object(settings, "grounding_fail_ratio", 0.5),
-        patch("app.services.grounding_service.get_router_llm", return_value=mock_llm),
+        patch("app.services.grounding_service.get_small_llm", return_value=mock_llm),
     ):
         result = validate_grounding("合同期限为三年。[550e8400-e29b-41d4-a716-446655440000#1]", [_sample_chunk()])
 
@@ -79,7 +79,7 @@ def test_validate_grounding_partial():
         patch.object(settings, "grounding_enabled", True),
         patch.object(settings, "grounding_min_supported_ratio", 0.8),
         patch.object(settings, "grounding_fail_ratio", 0.5),
-        patch("app.services.grounding_service.get_router_llm", return_value=mock_llm),
+        patch("app.services.grounding_service.get_small_llm", return_value=mock_llm),
     ):
         result = validate_grounding("事实 A 和事实 B", [_sample_chunk()])
 
@@ -95,7 +95,7 @@ def test_validate_grounding_skipped_on_llm_error():
 
     with (
         patch.object(settings, "grounding_enabled", True),
-        patch("app.services.grounding_service.get_router_llm", return_value=mock_llm),
+        patch("app.services.grounding_service.get_small_llm", return_value=mock_llm),
     ):
         result = validate_grounding("答案", [_sample_chunk()])
 

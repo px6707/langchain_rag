@@ -52,7 +52,7 @@ The chat model is instructed to cite facts using the same `[document_id#chunk_in
 
 ## Grounding validation
 
-After each answer (when retrieval ran), the router LLM judges whether factual claims are supported by retrieved chunks. Results are sent as SSE `grounding` events and shown as badges in the UI (answer text is not modified).
+After each answer (when retrieval ran), the small LLM judges whether factual claims are supported by retrieved chunks. Results are sent as SSE `grounding` events and shown as badges in the UI (answer text is not modified).
 
 ```env
 GROUNDING_ENABLED=true
@@ -67,7 +67,7 @@ Status mapping:
 - `>= GROUNDING_FAIL_RATIO` → partial (orange)
 - otherwise → not_supported (red)
 
-Uses the same router LLM as retrieval routing (`ROUTER_LLM_*` or fallback to main `LLM_*`).
+Uses the shared small LLM (`SMALL_LLM_*` or fallback to main `LLM_*`). See also retrieval routing and query rewrite, which use the same `get_small_llm()`.
 
 ## API format
 

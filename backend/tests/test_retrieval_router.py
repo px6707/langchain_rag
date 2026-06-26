@@ -15,7 +15,7 @@ from app.services.retrieval_router import (
 from app.services.retrieval_validator import normalize_plan
 
 
-def _mock_router_llm(*, rewrite=None, strategy=None, strategy_sequence=None):
+def _mock_small_llm(*, rewrite=None, strategy=None, strategy_sequence=None):
     llm = MagicMock()
     strategy_calls = {"count": 0}
 
@@ -56,7 +56,7 @@ def test_rewrite_query_single_turn_skips_llm():
 
 
 def test_resolve_standalone_calls_llm_on_multi_turn():
-    llm = _mock_router_llm(
+    llm = _mock_small_llm(
         rewrite={
             "standalone_query": "RAG 是什么",
             "resolved_entities": ["RAG"],
@@ -76,7 +76,7 @@ def test_resolve_standalone_calls_llm_on_multi_turn():
 
 
 def test_plan_retrieval_postcheck_overrides_skip():
-    llm = _mock_router_llm(
+    llm = _mock_small_llm(
         rewrite={
             "standalone_query": "文档合同条款说明",
             "resolved_entities": [],
@@ -111,7 +111,7 @@ def test_plan_retrieval_postcheck_reruns_strategy_on_skip_upgrade():
         "hyde_document": None,
         "reason": "llm skip",
     }
-    llm = _mock_router_llm(
+    llm = _mock_small_llm(
         rewrite={
             "standalone_query": "合同A的限制是什么",
             "resolved_entities": ["合同A"],
@@ -141,7 +141,7 @@ def test_plan_retrieval_postcheck_pins_retrieve_when_strategy_skips_again():
         "hyde_document": None,
         "reason": "llm skip again",
     }
-    llm = _mock_router_llm(
+    llm = _mock_small_llm(
         rewrite={
             "standalone_query": "合同A的限制是什么",
             "resolved_entities": ["合同A"],
@@ -162,7 +162,7 @@ def test_plan_retrieval_postcheck_pins_retrieve_when_strategy_skips_again():
 
 
 def test_plan_retrieval_two_step():
-    llm = _mock_router_llm(
+    llm = _mock_small_llm(
         rewrite={
             "standalone_query": "完整问题",
             "resolved_entities": [],

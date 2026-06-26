@@ -6,7 +6,7 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMe
 
 from app.config import settings
 from app.schemas.retrieval import QueryRewrite, RetrievalPlan, StrategyPlan
-from app.services.llm_service import get_router_llm
+from app.services.llm_service import get_small_llm
 from app.services.retrieval_rules import rule_postcheck_retrieve, rule_precheck
 from app.services.retrieval_validator import has_anaphora, normalize_plan, suggest_strategy
 
@@ -234,7 +234,7 @@ def rewrite_query(
 
 
 def rewrite_query_force(messages: list, *, llm: BaseChatModel | None = None) -> QueryRewrite:
-    model = llm or get_router_llm()
+    model = llm or get_small_llm()
     return _invoke_rewrite(messages, llm=model, force=True)
 
 
@@ -250,7 +250,7 @@ def resolve_standalone(
     if not _needs_rewrite(messages):
         return query.strip(), []
 
-    model = llm or get_router_llm()
+    model = llm or get_small_llm()
     entities: list[str] = []
 
     try:
@@ -295,7 +295,7 @@ def plan_strategy(
         f"## 已改写 query（standalone_query）\n{standalone_query}"
         f"{hint_text}"
     )
-    model = llm or get_router_llm()
+    model = llm or get_small_llm()
     structured = model.with_structured_output(StrategyPlan)
 
     raw = structured.invoke(
@@ -350,7 +350,7 @@ def plan_retrieval(
     if not settings.retrieval_routing_enabled:
         return _fallback_plan(original, reason="检索路由已关闭")
 
-    model = llm or get_router_llm()
+    model = llm or get_small_llm()
 
     try:
         standalone, _ = resolve_standalone(messages, llm=model)
