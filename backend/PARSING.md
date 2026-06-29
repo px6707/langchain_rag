@@ -67,11 +67,34 @@ cd backend
 python -m app.worker.parse_worker
 ```
 
-Docker Compose (includes ffmpeg):
+### Docker
+
+Full stack (from repo root):
 
 ```bash
-docker compose up parse-worker
+cp backend/.env.docker.example backend/.env
+docker compose up -d --build
 ```
+
+Backend only (API + worker + postgres + elasticsearch + mailpit):
+
+```bash
+cd backend
+cp .env.docker.example .env
+docker compose up -d --build
+```
+
+Parse worker image includes **ffmpeg** for video frame extraction and audio splitting. Uploads are shared between `api` and `parse-worker` via the `uploads` volume.
+
+| Container | Role |
+|-----------|------|
+| `api` | FastAPI + Alembic auto-migrate on start |
+| `parse-worker` | Document parsing pipeline + ffmpeg |
+| `postgres` | Metadata + LangGraph checkpoint |
+| `elasticsearch` | Vector / BM25 index |
+| `mailpit` | Dev SMTP capture (`SMTP_HOST=mailpit`, UI :8025) |
+
+Not containerized (configure via `.env`): MinerU cloud, LLM/Embedding/ASR/VLM APIs, OpenViking (in-process SDK + volume).
 
 ## Configuration
 

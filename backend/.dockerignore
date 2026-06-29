@@ -1,0 +1,15 @@
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+.git/
+.env
+.env.*
+!.env.docker.example
+uploads/
+openviking_data/
+htmlcov/
+.coverage

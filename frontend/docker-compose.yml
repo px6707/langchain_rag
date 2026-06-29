@@ -1,18 +1,17 @@
-include:
-  - path: backend/docker-compose.yml
-
 services:
   frontend:
     build:
-      context: ./frontend
+      context: .
       dockerfile: Dockerfile
       args:
         NODE_IMAGE: ${NODE_BASE_IMAGE:-docker.m.daocloud.io/library/node:20-alpine}
         NGINX_IMAGE: ${NGINX_BASE_IMAGE:-docker.m.daocloud.io/library/nginx:alpine}
     ports:
       - "5170:80"
-    depends_on:
-      api:
-        condition: service_healthy
     networks:
       - rag-network
+
+networks:
+  rag-network:
+    external: true
+    name: rag-network

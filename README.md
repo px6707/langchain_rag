@@ -11,22 +11,55 @@
 
 ## 快速开始
 
-### 1. 启动基础设施
+### 方式 A：Docker（推荐）
 
 ```bash
-docker compose up -d
+cp backend/.env.docker.example backend/.env
+# 编辑 backend/.env，填入 LLM / Embedding API 密钥
+
+docker compose up -d --build
 ```
 
-> PostgreSQL 映射到本机 **5433** 端口，避免与本机已安装的 PostgreSQL（5432）冲突。
+| 服务 | 地址 |
+|------|------|
+| 前端 | http://localhost:5170 |
+| 后端 API | http://localhost:8000 |
+| PostgreSQL | localhost:5433 |
+| Elasticsearch | http://localhost:9200 |
+| Mailpit（SMTP 测试） | http://localhost:8025 |
 
-### 2. 配置环境变量
+**分目录启动**：
+
+```bash
+# 仅后端（含 DB / ES / worker / Mailpit）
+cd backend && docker compose up -d --build
+
+# 仅前端（需 backend 已创建 rag-network）
+cd frontend && docker compose up -d --build
+```
+
+LLM、MinerU、ASR 等仍为外部 API，在 `backend/.env` 中配置。视频抽帧由 parse-worker 容器内 **ffmpeg** 完成（非独立服务）。
+
+**Docker 镜像拉取**：默认经 DaoCloud 镜像站拉取基础镜像；Mailpit 用 `ghcr.io`。Apple Silicon 上 backend 使用 `platform: linux/amd64`（`office-oxide` 无 arm64 Linux wheel）。海外网络可在 `.env.docker.example` 中改回官方镜像名。
+
+### 方式 B：本地开发
+
+#### 1. 启动基础设施
+
+```bash
+docker compose up -d postgres elasticsearch mailpit
+```
+
+> 也可 `cd backend && docker compose up -d postgres elasticsearch mailpit`。PostgreSQL 映射到本机 **5433** 端口。
+
+#### 2. 配置环境变量
 
 ```bash
 cp .env.example backend/.env
 # 编辑 backend/.env，填入 LLM 和 Embedding API 配置
 ```
 
-### 3. 启动后端
+#### 3. 启动后端
 
 需要 **Python 3.12**（与 parse-worker Docker 镜像一致，`office-oxide` 需此版本）。
 
@@ -38,7 +71,7 @@ pip install -r requirements.txt
 uvicorn app.main:app --reload --port 8000
 ```
 
-### 4. 启动前端
+#### 4. 启动前端
 
 ```bash
 cd frontend
@@ -46,7 +79,7 @@ npm install
 npm run dev
 ```
 
-访问 http://localhost:5173 ，使用 `.env` 中配置的管理员账号登录（默认 `admin` / `admin123`）。
+访问 http://localhost:5170 ，使用 `.env` 中配置的管理员账号登录（默认 `admin` / `admin123`）。
 
 ## 用户与权限
 
@@ -114,4 +147,4 @@ def my_tool(query: str) -> str:
 | POST | `/api/chat` | RAG 对话 | 需登录 |
 | GET | `/api/chat/history` | 对话历史 | 需登录 |
 | GET | `/api/chat/tools` | 已注册工具列表（本地 + MCP） | 需登录 |
-| GET | `/health` | 健康检查（含 MCP 状态） | 公开 |
+| GET | `/health` | 健康检查（含 Postgres / Elasticsearch / MCP 状态） | 公开 |
