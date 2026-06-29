@@ -27,7 +27,14 @@ Long-running parses use a **lease + generation** model to avoid races when jobs 
 
 **Pipeline**: checks ownership at stage boundaries; only the owner may write to Elasticsearch (`parse_generation` + `job_id` in chunk metadata).
 
-**Deploy upgrade**: run [`scripts/migrate_parse_job_lease.sql`](scripts/migrate_parse_job_lease.sql) on existing PostgreSQL databases (`create_all` does not alter existing tables).
+**Deploy upgrade**: schema changes are applied automatically via Alembic on API/worker startup (`upgrade head`). Set `AUTO_DB_MIGRATE=false` to disable.
+
+If upgrading from a database that already has the latest schema (e.g. previously used `create_all` or manual SQL), run once:
+
+```bash
+cd backend && alembic stamp head
+```
+
 
 ## Document user isolation
 
@@ -39,10 +46,11 @@ Each document belongs to the uploading user (`documents.user_id`). Non-admin use
 | Elasticsearch | Chunk metadata includes `user_id`; retrieval applies ES filter for non-admins |
 | Chat | `RAGService` sets per-request retrieval context from JWT user |
 
-**Deploy upgrade** (existing DB):
+**Deploy upgrade** (existing DB with legacy documents):
 
-1. Run [`scripts/migrate_document_user_id.sql`](scripts/migrate_document_user_id.sql) — backfills legacy rows to the first admin user.
-2. **Reparse recommended** for documents indexed before migration so ES chunks get `metadata.user_id` (otherwise non-admins cannot retrieve legacy chunks).
+1. If schema is already current, run `alembic stamp head` (see above).
+2. **Reparse recommended** for documents indexed before `user_id` migration so ES chunks get `metadata.user_id` (otherwise non-admins cannot retrieve legacy chunks).
+
 
 
 | Variable | Default | Purpose |

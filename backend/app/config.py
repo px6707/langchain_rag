@@ -24,6 +24,7 @@ class Settings(BaseSettings):
     # --- 数据库 ---
     database_url: str = "postgresql+asyncpg://rag:rag@localhost:5433/rag"  # 业务库连接串（asyncpg，用户/文档等）
     checkpointer_database_url: str = "postgresql://rag:rag@localhost:5433/rag"  # LangGraph 会话 checkpoint 库（同步驱动）
+    auto_db_migrate: bool = True  # 启动时自动执行 Alembic upgrade head
 
     # --- Elasticsearch（向量 + 全文检索）---
     es_url: str = "http://localhost:9200"  # Elasticsearch 集群地址

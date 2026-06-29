@@ -55,6 +55,25 @@ npm run dev
 - **管理中心** `/admin/users`：管理员可增删改用户、禁用/启用、重置密码
 - **种子管理员**：首次启动且数据库无用户时，按 `ADMIN_USERNAME` / `ADMIN_PASSWORD` 自动创建
 
+## 数据库迁移
+
+业务库 schema 由 [Alembic](https://alembic.sqlalchemy.org/) 管理。API 与 parse worker 启动时会自动执行 `upgrade head`（可通过 `AUTO_DB_MIGRATE=false` 关闭）。
+
+**修改 ORM 模型后**（在 `backend/` 目录）：
+
+```bash
+alembic revision --autogenerate -m "describe change"
+alembic upgrade head
+```
+
+**从旧版升级**（schema 已是最新、但从未跑过 Alembic）：
+
+```bash
+cd backend && alembic stamp head
+```
+
+详见 [`backend/PARSING.md`](backend/PARSING.md) 中的部署说明。
+
 ## 架构说明
 
 - **Agent**: LangChain `create_agent` + `AsyncPostgresSaver` 持久化多轮对话

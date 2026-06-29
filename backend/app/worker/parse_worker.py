@@ -4,6 +4,7 @@ import logging
 from sqlalchemy import select
 
 from app.config import settings
+from app.db.migrate import run_migrations
 from app.database import async_session
 from app.models import Document, ParseJob
 from app.parsing.parse_execution import JobSupersededError, ParseExecutionContext
@@ -99,6 +100,7 @@ def main() -> None:
         level=logging.INFO,
         format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
     )
+    run_migrations()
     asyncio.run(worker_loop())
 
 
