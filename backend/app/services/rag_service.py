@@ -21,6 +21,7 @@ from app.agent.middleware.openviking import reset_ov_request_context, set_ov_req
 from app.observability.langsmith import is_langsmith_enabled
 from app.openviking.session_service import sync_turn_to_openviking
 from app.schemas import SourceInfo
+from app.services.retrieval_context import reset_retrieval_user_context, set_retrieval_user_context
 
 logger = logging.getLogger(__name__)
 
@@ -108,11 +109,13 @@ class RAGService:
         *,
         run_name: str = "rag_chat",
         user_message: str | None = None,
+        is_admin: bool = False,
     ) -> AsyncIterator[dict]:
         agent = get_agent()
         config = self._agent_config(session_id, user_id, run_name=run_name)
         seen_tool_ids: set[str] = set()
         ov_token = set_ov_request_context(user_id, session_id)
+        retrieval_token = set_retrieval_user_context(user_id, is_admin=is_admin)
         logger.info("agent stream start: session_id=%s user_id=%s run_name=%s", session_id, user_id, run_name)
 
         try:
@@ -144,6 +147,7 @@ class RAGService:
             yield {"type": "error", "message": f"RAG 服务错误: {exc}"}
             return
         finally:
+            reset_retrieval_user_context(retrieval_token)
             reset_ov_request_context(ov_token)
 
         state = await agent.aget_state(config)
@@ -192,12 +196,15 @@ class RAGService:
         session_id: str,
         user_id: str,
         message: str,
+        *,
+        is_admin: bool = False,
     ) -> AsyncIterator[dict]:
         async for event in self._run_agent_stream(
             session_id,
             user_id,
             {"messages": [HumanMessage(content=message)]},
             user_message=message,
+            is_admin=is_admin,
         ):
             yield event
 
@@ -206,12 +213,15 @@ class RAGService:
         session_id: str,
         user_id: str,
         decisions: list[dict],
+        *,
+        is_admin: bool = False,
     ) -> AsyncIterator[dict]:
         async for event in self._run_agent_stream(
             session_id,
             user_id,
             Command(resume={"decisions": decisions}),
             run_name="rag_resume",
+            is_admin=is_admin,
         ):
             yield event
 

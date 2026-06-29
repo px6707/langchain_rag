@@ -52,7 +52,12 @@ async def chat(request: ChatRequest, current_user: User = Depends(get_current_us
 
     async def event_generator():
         try:
-            async for event in service.chat_stream(request.session_id, user_id, request.message):
+            async for event in service.chat_stream(
+                request.session_id,
+                user_id,
+                request.message,
+                is_admin=current_user.is_admin,
+            ):
                 if event.get("type") == "error":
                     logger.error(
                         "chat stream error event: session_id=%s message=%s",
@@ -81,6 +86,7 @@ async def resume_chat(request: ChatResumeRequest, current_user: User = Depends(g
                 request.session_id,
                 user_id,
                 decisions,
+                is_admin=current_user.is_admin,
             ):
                 yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
         except Exception as e:

@@ -24,6 +24,7 @@ def test_process_one_job_skips_complete_when_document_deleted():
     ctx = _ctx_for(doc_id, job_id)
     document = Document(
         id=doc_id,
+        user_id=uuid.uuid4(),
         filename="a.txt",
         file_path="/tmp/a.txt",
         file_type="txt",
@@ -68,6 +69,7 @@ def test_process_one_job_skips_complete_when_superseded():
     ctx = _ctx_for(doc_id, job_id)
     document = Document(
         id=doc_id,
+        user_id=uuid.uuid4(),
         filename="a.txt",
         file_path="/tmp/a.txt",
         file_type="txt",

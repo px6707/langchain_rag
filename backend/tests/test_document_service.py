@@ -8,8 +8,10 @@ from app.services.document_service import DocumentService
 
 def test_reparse_document_resets_status_and_enqueues():
     doc_id = uuid.uuid4()
+    user_id = uuid.uuid4()
     doc = Document(
         id=doc_id,
+        user_id=user_id,
         filename="a.pdf",
         file_path="/tmp/a.pdf",
         file_type="pdf",
@@ -27,7 +29,9 @@ def test_reparse_document_resets_status_and_enqueues():
         patch("app.services.document_service.delete_document_vectors") as mock_delete,
         patch("app.services.document_service.enqueue_reparse", new_callable=AsyncMock) as mock_enqueue,
     ):
-        result = asyncio.run(service.reparse_document(doc_id))
+        result = asyncio.run(
+            service.reparse_document(doc_id, user_id=user_id, is_admin=False)
+        )
 
     assert result is doc
     assert doc.status == "queued"

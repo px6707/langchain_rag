@@ -37,7 +37,7 @@ def _guess_media_type(file_path: str, file_type: str) -> str:
 async def upload_document(
     file: UploadFile,
     db: AsyncSession = Depends(get_db),
-    _user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     if not file.filename:
         raise HTTPException(status_code=400, detail="No filename provided")
@@ -59,7 +59,7 @@ async def upload_document(
 
     service = DocumentService(db)
     try:
-        doc = await service.save_upload(file.filename, content)
+        doc = await service.save_upload(file.filename, content, user_id=current_user.id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return doc
@@ -70,10 +70,15 @@ async def list_documents(
     skip: int = Query(0, ge=0),
     limit: int = Query(20, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
-    _user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     service = DocumentService(db)
-    items, total = await service.list_documents(skip=skip, limit=limit)
+    items, total = await service.list_documents(
+        user_id=current_user.id,
+        is_admin=current_user.is_admin,
+        skip=skip,
+        limit=limit,
+    )
     return DocumentListResponse(items=items, total=total)
 
 
@@ -81,10 +86,20 @@ async def list_documents(
 async def get_document_chunk(
     doc_id: UUID,
     chunk_index: int,
-    _user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     if chunk_index < 0:
         raise HTTPException(status_code=400, detail="chunk_index must be non-negative")
+
+    service = DocumentService(db)
+    owned = await service.get_document(
+        doc_id,
+        user_id=current_user.id,
+        is_admin=current_user.is_admin,
+    )
+    if owned is None:
+        raise HTTPException(status_code=404, detail="Chunk not found")
 
     doc = get_chunk_by_ref(str(doc_id), chunk_index)
     if doc is None:
@@ -107,10 +122,14 @@ async def get_document_chunk(
 async def get_document_file(
     doc_id: UUID,
     db: AsyncSession = Depends(get_db),
-    _user: User = Depends(get_current_user_header_or_query),
+    current_user: User = Depends(get_current_user_header_or_query),
 ):
     service = DocumentService(db)
-    doc = await service.get_document(doc_id)
+    doc = await service.get_document(
+        doc_id,
+        user_id=current_user.id,
+        is_admin=current_user.is_admin,
+    )
     if doc is None:
         raise HTTPException(status_code=404, detail="Document not found")
     if doc.file_type not in _STREAMABLE_FILE_TYPES:
@@ -130,11 +149,15 @@ async def get_document_file(
 async def reparse_document(
     doc_id: UUID,
     db: AsyncSession = Depends(get_db),
-    _user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     service = DocumentService(db)
     try:
-        doc = await service.reparse_document(doc_id)
+        doc = await service.reparse_document(
+            doc_id,
+            user_id=current_user.id,
+            is_admin=current_user.is_admin,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if doc is None:
@@ -146,10 +169,14 @@ async def reparse_document(
 async def delete_document(
     doc_id: UUID,
     db: AsyncSession = Depends(get_db),
-    _user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     service = DocumentService(db)
-    deleted = await service.delete_document(doc_id)
+    deleted = await service.delete_document(
+        doc_id,
+        user_id=current_user.id,
+        is_admin=current_user.is_admin,
+    )
     if not deleted:
         raise HTTPException(status_code=404, detail="Document not found")
     return {"message": "Document deleted"}

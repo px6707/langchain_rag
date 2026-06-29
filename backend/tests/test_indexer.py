@@ -26,8 +26,10 @@ def _mock_ctx(doc_id: uuid.UUID) -> ParseExecutionContext:
 
 def test_index_documents_adds_then_deletes_old_batches():
     doc_id = uuid.uuid4()
+    user_id = uuid.uuid4()
     document = DocumentModel(
         id=doc_id,
+        user_id=user_id,
         filename="notes.txt",
         file_path="/tmp/notes.txt",
         file_type="txt",
@@ -44,6 +46,7 @@ def test_index_documents_adds_then_deletes_old_batches():
         assert all("index_batch" in c.metadata for c in chunks)
         assert all(c.metadata.get("parse_generation") == 1 for c in chunks)
         assert all("job_id" in c.metadata for c in chunks)
+        assert all(c.metadata.get("user_id") == str(user_id) for c in chunks)
 
     def track_delete_except(document_id: str, keep_batch: str, keep_generation: int) -> None:
         call_order.append("delete_except")
@@ -74,6 +77,7 @@ def test_index_documents_raises_superseded_before_commit():
     doc_id = uuid.uuid4()
     document = DocumentModel(
         id=doc_id,
+        user_id=uuid.uuid4(),
         filename="notes.txt",
         file_path="/tmp/notes.txt",
         file_type="txt",
@@ -100,6 +104,7 @@ def test_index_documents_add_failure_skips_delete():
     doc_id = uuid.uuid4()
     document = DocumentModel(
         id=doc_id,
+        user_id=uuid.uuid4(),
         filename="notes.txt",
         file_path="/tmp/notes.txt",
         file_type="txt",
@@ -128,6 +133,7 @@ def test_index_documents_delete_retry_failure_sets_warning():
     doc_id = uuid.uuid4()
     document = DocumentModel(
         id=doc_id,
+        user_id=uuid.uuid4(),
         filename="notes.txt",
         file_path="/tmp/notes.txt",
         file_type="txt",
@@ -156,6 +162,7 @@ def test_index_documents_raises_when_document_deleted():
     doc_id = uuid.uuid4()
     document = DocumentModel(
         id=doc_id,
+        user_id=uuid.uuid4(),
         filename="notes.txt",
         file_path="/tmp/notes.txt",
         file_type="txt",

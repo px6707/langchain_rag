@@ -12,6 +12,7 @@ def test_finish_job_failure_retry():
     job = ParseJob(document_id=uuid.uuid4(), status="running", attempts=1, parse_generation=1)
     document = Document(
         id=job.document_id,
+        user_id=uuid.uuid4(),
         filename="a.pdf",
         file_path="/tmp/a.pdf",
         file_type="pdf",
@@ -37,6 +38,7 @@ def test_finish_job_failure_final():
     job = ParseJob(document_id=uuid.uuid4(), status="running", attempts=3, parse_generation=1)
     document = Document(
         id=job.document_id,
+        user_id=uuid.uuid4(),
         filename="a.pdf",
         file_path="/tmp/a.pdf",
         file_type="pdf",
@@ -69,6 +71,7 @@ def test_reclaim_stale_jobs_cancels_and_enqueues_new():
     )
     document = Document(
         id=doc_id,
+        user_id=uuid.uuid4(),
         filename="a.pdf",
         file_path="/tmp/a.pdf",
         file_type="pdf",
@@ -106,6 +109,7 @@ def test_enqueue_reparse_bumps_generation():
     doc_id = uuid.uuid4()
     document = Document(
         id=doc_id,
+        user_id=uuid.uuid4(),
         filename="a.pdf",
         file_path="/tmp/a.pdf",
         file_type="pdf",

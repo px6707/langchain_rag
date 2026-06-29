@@ -57,6 +57,7 @@ async def index_documents(
         chunk.metadata["index_batch"] = index_batch
         chunk.metadata["parse_generation"] = ctx.parse_generation
         chunk.metadata["job_id"] = str(ctx.job_id)
+        chunk.metadata["user_id"] = str(document.user_id)
 
     await _ensure_document_exists(session, document)
     await ctx.abort_if_lost(session)

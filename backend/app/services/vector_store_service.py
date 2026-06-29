@@ -6,10 +6,29 @@ from langchain_elasticsearch import DenseVectorStrategy, ElasticsearchStore
 
 from app.config import settings
 from app.services.embedding_service import get_embeddings
+from app.services.retrieval_context import get_retrieval_user_filter
 
 logger = logging.getLogger(__name__)
 
 _store_cache: dict[bool, ElasticsearchStore] = {}
+
+
+def user_es_term(user_id: str) -> dict:
+    return {"term": {"metadata.user_id.keyword": user_id}}
+
+
+def append_es_user_filters(filters: list[dict]) -> list[dict]:
+    user_id = get_retrieval_user_filter()
+    if user_id is None:
+        return filters
+    return [*filters, user_es_term(user_id)]
+
+
+def filter_documents_by_user(docs: list[Document]) -> list[Document]:
+    user_id = get_retrieval_user_filter()
+    if user_id is None:
+        return docs
+    return [doc for doc in docs if str(doc.metadata.get("user_id", "")) == user_id]
 
 
 def get_vector_store(*, use_hybrid: bool | None = None) -> ElasticsearchStore:
@@ -164,10 +183,12 @@ def get_chunk_by_ref(document_id: str, chunk_index: int) -> Document | None:
         index=settings.es_index,
         query={
             "bool": {
-                "filter": [
-                    {"term": {"metadata.document_id.keyword": document_id}},
-                    {"term": {"metadata.chunk_index": chunk_index}},
-                ]
+                "filter": append_es_user_filters(
+                    [
+                        {"term": {"metadata.document_id.keyword": document_id}},
+                        {"term": {"metadata.chunk_index": chunk_index}},
+                    ]
+                )
             }
         },
         size=1,
@@ -191,10 +212,12 @@ def fetch_chunks_by_page(
         index=settings.es_index,
         query={
             "bool": {
-                "filter": [
-                    {"term": {"metadata.document_id.keyword": document_id}},
-                    {"term": {"metadata.page_number": page_number}},
-                ]
+                "filter": append_es_user_filters(
+                    [
+                        {"term": {"metadata.document_id.keyword": document_id}},
+                        {"term": {"metadata.page_number": page_number}},
+                    ]
+                )
             }
         },
         size=limit,
@@ -217,7 +240,9 @@ def fetch_chunks_by_asr_segment(
         index=settings.es_index,
         query={
             "bool": {
-                "filter": [{"term": {"metadata.document_id.keyword": document_id}}],
+                "filter": append_es_user_filters(
+                    [{"term": {"metadata.document_id.keyword": document_id}}]
+                ),
                 "should": [
                     {"term": {"metadata.asr_segment_index": segment_index}},
                     {"term": {"metadata.segment_index": segment_index}},
@@ -235,10 +260,20 @@ def fetch_chunks_by_asr_segment(
 def bm25_search(query: str, *, k: int) -> list[Document]:
     store = get_vector_store(use_hybrid=False)
     client = store.client
+    user_id = get_retrieval_user_filter()
+    if user_id is None:
+        es_query: dict = {"match": {"text": query}}
+    else:
+        es_query = {
+            "bool": {
+                "must": [{"match": {"text": query}}],
+                "filter": [user_es_term(user_id)],
+            }
+        }
     response = client.search(
         index=settings.es_index,
-        query={"match": {"text": query}},
+        query=es_query,
         size=k,
     )
     hits = response.get("hits", {}).get("hits", [])
-    return [_hit_to_document(hit) for hit in hits]
+    return filter_documents_by_user([_hit_to_document(hit) for hit in hits])

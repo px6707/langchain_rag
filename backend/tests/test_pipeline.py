@@ -13,6 +13,7 @@ def test_run_parse_pipeline_python_strategy():
     doc_id = uuid.uuid4()
     document = DocumentModel(
         id=doc_id,
+        user_id=uuid.uuid4(),
         filename="notes.txt",
         file_path="/tmp/notes.txt",
         file_type="txt",

@@ -18,8 +18,11 @@ from app.services.vector_store_service import (
     bm25_search,
     fetch_chunks_by_asr_segment,
     fetch_chunks_by_page,
+    filter_documents_by_user,
     get_vector_store,
+    user_es_term,
 )
+from app.services.retrieval_context import get_retrieval_user_filter
 
 logger = logging.getLogger(__name__)
 
@@ -119,8 +122,13 @@ def _retrieve_raw(
 ) -> list[Document]:
     fetch_k = k if k is not None else _fetch_k()
     store = get_vector_store(use_hybrid=use_hybrid)
-    base_retriever = store.as_retriever(search_kwargs={"k": fetch_k})
-    return list(base_retriever.invoke(query))
+    search_kwargs: dict = {"k": fetch_k}
+    user_id = get_retrieval_user_filter()
+    if user_id is not None:
+        search_kwargs["filter"] = user_es_term(user_id)
+    base_retriever = store.as_retriever(search_kwargs=search_kwargs)
+    docs = list(base_retriever.invoke(query))
+    return filter_documents_by_user(docs)
 
 
 def _retrieve_with_hybrid_fallback(

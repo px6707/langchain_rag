@@ -13,6 +13,7 @@ def test_process_video_frame_skips_vlm_when_disabled(tmp_path):
     frame_path.write_bytes(b"png")
     document = DocumentModel(
         id=__import__("uuid").uuid4(),
+        user_id=__import__("uuid").uuid4(),
         filename="demo.mp4",
         file_path="/tmp/demo.mp4",
         file_type="video",
@@ -35,6 +36,7 @@ def test_process_video_frame_calls_vlm_when_enabled_and_ocr_short(tmp_path):
     frame_path.write_bytes(b"png")
     document = DocumentModel(
         id=__import__("uuid").uuid4(),
+        user_id=__import__("uuid").uuid4(),
         filename="demo.mp4",
         file_path="/tmp/demo.mp4",
         file_type="video",
