@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from pathlib import Path
 
@@ -18,3 +19,9 @@ def run_migrations() -> None:
     cfg = Config(str(_ALEMBIC_INI))
     logger.info("Running Alembic migrations to head")
     command.upgrade(cfg, "head")
+
+
+async def run_migrations_async() -> None:
+    """Run Alembic in a worker thread — safe inside FastAPI/uvicorn event loop."""
+    await asyncio.to_thread(run_migrations)
+

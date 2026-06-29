@@ -19,7 +19,7 @@ from app.agent.checkpointer import close_checkpointer, init_checkpointer
 from app.agent.factory import build_agent
 from app.auth.seed import ensure_seed_admin
 from app.config import settings
-from app.db.migrate import run_migrations
+from app.db.migrate import run_migrations_async
 from app.database import get_db
 from app import models as _models  # noqa: F401 — register ORM tables
 from app.health import build_health_payload
@@ -30,7 +30,7 @@ from app.routers import admin, auth, chat, documents
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    run_migrations()
+    await run_migrations_async()
 
     async for db in get_db():
         await ensure_seed_admin(db)
