@@ -59,6 +59,11 @@ export interface DocumentChunk {
   ref_id: string
   filename: string
   content: string
+  file_type?: string | null
+  content_type?: string | null
+  timestamp_sec?: number | null
+  start_sec?: number | null
+  end_sec?: number | null
 }
 
 export interface SourceInfo {
@@ -68,6 +73,11 @@ export interface SourceInfo {
   filename: string
   content: string
   score?: number | null
+  file_type?: string | null
+  content_type?: string | null
+  timestamp_sec?: number | null
+  start_sec?: number | null
+  end_sec?: number | null
 }
 
 export interface ClaimVerdict {
@@ -173,6 +183,12 @@ export async function deleteDocument(id: string): Promise<void> {
 export async function getDocumentChunk(docId: string, chunkIndex: number): Promise<DocumentChunk> {
   const { data } = await api.get<DocumentChunk>(`/documents/${docId}/chunks/${chunkIndex}`)
   return data
+}
+
+export function getDocumentFileUrl(docId: string): string {
+  const token = getAccessToken()
+  const params = token ? `?access_token=${encodeURIComponent(token)}` : ''
+  return `/api/documents/${docId}/file${params}`
 }
 
 export type ChatStreamEvent =

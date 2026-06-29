@@ -50,14 +50,14 @@ def _post_transcription(
             return response.text
 
 
-def _segments_from_verbose(body: dict) -> list[TranscriptSegment]:
+def _segments_from_verbose(body: dict, *, offset: float = 0.0) -> list[TranscriptSegment]:
     raw_segments = body.get("segments")
     if not isinstance(raw_segments, list):
         text = str(body.get("text", "")).strip()
         if not text:
             return []
         duration = float(body.get("duration") or 0.0)
-        return [TranscriptSegment(start_sec=0.0, end_sec=duration, text=text)]
+        return [TranscriptSegment(start_sec=offset, end_sec=offset + duration, text=text)]
 
     segments: list[TranscriptSegment] = []
     for item in raw_segments:
@@ -68,12 +68,46 @@ def _segments_from_verbose(body: dict) -> list[TranscriptSegment]:
             continue
         segments.append(
             TranscriptSegment(
-                start_sec=float(item.get("start", 0.0)),
-                end_sec=float(item.get("end", 0.0)),
+                start_sec=float(item.get("start", 0.0)) + offset,
+                end_sec=float(item.get("end", 0.0)) + offset,
                 text=text,
             )
         )
     return segments
+
+
+def _probe_audio_duration(file_path: str) -> float | None:
+    if shutil.which("ffprobe") is None:
+        return None
+    cmd = [
+        "ffprobe",
+        "-v", "error",
+        "-show_entries", "format=duration",
+        "-of", "default=noprint_wrappers=1:nokey=1",
+        file_path,
+    ]
+    try:
+        result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+        return float(result.stdout.strip())
+    except (subprocess.CalledProcessError, ValueError):
+        return None
+
+
+def _should_proactive_split(file_path: str) -> bool:
+    if not settings.asr_proactive_split_enabled:
+        return False
+
+    duration = _probe_audio_duration(file_path)
+    if duration is not None and duration > settings.asr_proactive_split_min_duration_sec:
+        return True
+
+    try:
+        size_mb = Path(file_path).stat().st_size / (1024 * 1024)
+        if size_mb > settings.asr_proactive_max_file_mb:
+            return True
+    except OSError:
+        pass
+    return False
 
 
 def _split_audio_segments(file_path: str, segment_sec: int) -> list[tuple[float, str]]:
@@ -106,8 +140,12 @@ def _split_audio_segments(file_path: str, segment_sec: int) -> list[tuple[float,
     return result
 
 
-def _transcribe_with_fallback_segments(file_path: str) -> list[TranscriptSegment]:
-    segment_sec = settings.asr_fallback_segment_sec
+def _transcribe_split_segments(
+    file_path: str,
+    segment_sec: int,
+    *,
+    use_verbose: bool,
+) -> list[TranscriptSegment]:
     parts = _split_audio_segments(file_path, segment_sec)
     segments: list[TranscriptSegment] = []
     temp_dirs: set[str] = set()
@@ -116,29 +154,54 @@ def _transcribe_with_fallback_segments(file_path: str) -> list[TranscriptSegment
         if part_path != file_path:
             temp_dirs.add(str(Path(part_path).parent))
         try:
+            if use_verbose:
+                body = _post_transcription(part_path, response_format="verbose_json")
+                if isinstance(body, dict):
+                    part_segments = _segments_from_verbose(body, offset=offset)
+                    if part_segments:
+                        segments.extend(part_segments)
+                        continue
             body = _post_transcription(part_path)
             if isinstance(body, dict):
                 text = str(body.get("text", "")).strip()
             else:
                 text = body.strip()
-        except Exception:
-            logger.exception("ASR fallback segment failed: %s", part_path)
-            continue
-        if text:
-            segments.append(
-                TranscriptSegment(
-                    start_sec=float(offset),
-                    end_sec=float(offset + segment_sec),
-                    text=text,
+            if text:
+                segments.append(
+                    TranscriptSegment(
+                        start_sec=float(offset),
+                        end_sec=float(offset + segment_sec),
+                        text=text,
+                    )
                 )
-            )
+        except Exception:
+            logger.exception("ASR split segment failed: %s", part_path)
+            continue
 
     for temp_dir in temp_dirs:
         shutil.rmtree(temp_dir, ignore_errors=True)
     return segments
 
 
+def _transcribe_with_fallback_segments(file_path: str) -> list[TranscriptSegment]:
+    return _transcribe_split_segments(
+        file_path,
+        settings.asr_fallback_segment_sec,
+        use_verbose=False,
+    )
+
+
 def transcribe_audio_segments(file_path: str) -> list[TranscriptSegment]:
+    if _should_proactive_split(file_path):
+        segments = _transcribe_split_segments(
+            file_path,
+            settings.asr_proactive_segment_sec,
+            use_verbose=True,
+        )
+        if segments:
+            return segments
+        logger.warning("Proactive ASR split returned no segments; falling back to whole-file path")
+
     if settings.asr_use_verbose_json:
         try:
             body = _post_transcription(file_path, response_format="verbose_json")

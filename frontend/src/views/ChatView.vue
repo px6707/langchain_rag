@@ -143,6 +143,12 @@
                     [{{ source.ref_id }}]
                   </button>
                   <span class="ml-2">{{ source.filename }}</span>
+                  <span
+                    v-if="formatSourceTime(source)"
+                    class="ml-2 text-gray-500 font-mono"
+                  >
+                    ({{ formatSourceTime(source) }})
+                  </span>
                   <span v-if="source.score != null" class="ml-2 text-gray-400">
                     ({{ source.score.toFixed(3) }})
                   </span>
@@ -260,6 +266,37 @@
 
     <el-drawer v-model="chunkDrawerVisible" :title="chunkDrawerTitle" size="40%">
       <div v-loading="chunkDrawerLoading" class="min-h-[120px]">
+        <div v-if="chunkDrawerIsVideo" class="mb-4">
+          <video
+            ref="videoRef"
+            class="w-full rounded-lg bg-black"
+            controls
+            :src="chunkDrawerVideoUrl"
+            @loadedmetadata="onVideoLoaded"
+          />
+          <div v-if="chunkDrawerTimePoints.length" class="mt-4">
+            <p class="text-xs text-gray-500 mb-2">本回答中的视频时间点</p>
+            <ul class="space-y-2 max-h-64 overflow-y-auto">
+              <li
+                v-for="point in chunkDrawerTimePoints"
+                :key="point.refId"
+                class="text-xs rounded p-2 cursor-pointer border transition-colors"
+                :class="
+                  point.refId === chunkDrawerRefId
+                    ? 'bg-blue-50 border-blue-300'
+                    : 'bg-gray-50 border-gray-200 hover:bg-gray-100'
+                "
+                @click="seekVideo(point.seekSec, point.refId)"
+              >
+                <div class="flex items-center gap-2 mb-1">
+                  <span class="font-mono font-medium text-blue-600">{{ formatTime(point.seekSec) }}</span>
+                  <span class="font-mono text-gray-400">[{{ point.refId }}]</span>
+                </div>
+                <p class="text-gray-600 line-clamp-2">{{ point.preview }}</p>
+              </li>
+            </ul>
+          </div>
+        </div>
         <p v-if="chunkDrawerFilename" class="text-sm text-gray-500 mb-3">{{ chunkDrawerFilename }}</p>
         <p v-if="chunkDrawerRefId" class="text-xs font-mono text-blue-600 mb-3">[{{ chunkDrawerRefId }}]</p>
         <p class="whitespace-pre-wrap text-gray-800">{{ chunkDrawerContent }}</p>
@@ -277,6 +314,7 @@ import CitationText from '@/components/CitationText.vue'
 import {
   getChatHistory,
   getDocumentChunk,
+  getDocumentFileUrl,
   getPendingInterrupt,
   resumeChatStream,
   sendChatStream,
@@ -286,6 +324,7 @@ import {
   type HITLDecision,
   type HITLRequest,
   type SendEmailArgs,
+  type SourceInfo,
   type TodoItem,
   type ToolCallInfo,
 } from '@/api'
@@ -315,6 +354,82 @@ const chunkDrawerTitle = ref('文档片段')
 const chunkDrawerFilename = ref('')
 const chunkDrawerRefId = ref('')
 const chunkDrawerContent = ref('')
+const chunkDrawerIsVideo = ref(false)
+const chunkDrawerVideoUrl = ref('')
+const chunkDrawerTimePoints = ref<Array<{ refId: string; seekSec: number; preview: string }>>([])
+const chunkDrawerPendingSeek = ref<number | null>(null)
+const videoRef = ref<HTMLVideoElement | null>(null)
+
+const VIDEO_EXTENSIONS = new Set(['.mp4', '.mkv', '.mov', '.webm', '.avi', '.flv', '.wmv', '.m4v'])
+
+type VideoTimePoint = { refId: string; seekSec: number; preview: string }
+
+function sourceSeekSec(source: SourceInfo): number | null {
+  if (source.timestamp_sec != null) return source.timestamp_sec
+  if (source.start_sec != null) return source.start_sec
+  return null
+}
+
+function isVideoSource(source: SourceInfo): boolean {
+  if (source.file_type === 'video') return true
+  const name = source.filename.toLowerCase()
+  const dot = name.lastIndexOf('.')
+  if (dot < 0) return false
+  return VIDEO_EXTENSIONS.has(name.slice(dot))
+}
+
+function formatSourceTime(source: SourceInfo): string | null {
+  const sec = sourceSeekSec(source)
+  return sec != null ? formatTime(sec) : null
+}
+
+function formatTime(sec: number): string {
+  const total = Math.max(0, Math.floor(sec))
+  const h = Math.floor(total / 3600)
+  const m = Math.floor((total % 3600) / 60)
+  const s = total % 60
+  if (h > 0) {
+    return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+  }
+  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+}
+
+function buildVideoTimePoints(sources: SourceInfo[], docId: string): VideoTimePoint[] {
+  const points: VideoTimePoint[] = []
+  const seenTimes: number[] = []
+
+  for (const source of sources) {
+    if (source.document_id !== docId) continue
+    const seekSec = sourceSeekSec(source)
+    if (seekSec == null) continue
+    if (seenTimes.some((t) => Math.abs(t - seekSec) < 3)) continue
+    seenTimes.push(seekSec)
+    points.push({
+      refId: source.ref_id,
+      seekSec,
+      preview: source.content.slice(0, 80),
+    })
+  }
+
+  return points.sort((a, b) => a.seekSec - b.seekSec)
+}
+
+function onVideoLoaded() {
+  if (chunkDrawerPendingSeek.value == null || !videoRef.value) return
+  videoRef.value.currentTime = chunkDrawerPendingSeek.value
+  void videoRef.value.play().catch(() => {})
+  chunkDrawerPendingSeek.value = null
+}
+
+function seekVideo(seekSec: number, refId: string) {
+  chunkDrawerRefId.value = refId
+  chunkDrawerPendingSeek.value = seekSec
+  if (videoRef.value) {
+    videoRef.value.currentTime = seekSec
+    void videoRef.value.play().catch(() => {})
+    chunkDrawerPendingSeek.value = null
+  }
+}
 
 const isSendEmailHitl = computed(
   () => pendingHitlRequest.value?.action_requests[0]?.name === 'send_email',
@@ -351,6 +466,10 @@ async function openChunkDrawer(docId: string, chunkIndex: number, refId: string)
   chunkDrawerFilename.value = ''
   chunkDrawerRefId.value = refId
   chunkDrawerContent.value = ''
+  chunkDrawerIsVideo.value = false
+  chunkDrawerVideoUrl.value = ''
+  chunkDrawerTimePoints.value = []
+  chunkDrawerPendingSeek.value = null
 
   const msg = messages.value.find((m) =>
     m.sources?.some((s) => s.ref_id === refId),
@@ -359,6 +478,15 @@ async function openChunkDrawer(docId: string, chunkIndex: number, refId: string)
   if (preview) {
     chunkDrawerFilename.value = preview.filename
     chunkDrawerContent.value = preview.content
+    if (isVideoSource(preview)) {
+      chunkDrawerIsVideo.value = true
+      chunkDrawerVideoUrl.value = getDocumentFileUrl(docId)
+      chunkDrawerTimePoints.value = buildVideoTimePoints(msg?.sources ?? [], docId)
+      const seek = sourceSeekSec(preview)
+      if (seek != null) {
+        chunkDrawerPendingSeek.value = seek
+      }
+    }
   }
 
   try {
@@ -367,6 +495,30 @@ async function openChunkDrawer(docId: string, chunkIndex: number, refId: string)
     chunkDrawerRefId.value = chunk.ref_id
     chunkDrawerContent.value = chunk.content
     chunkDrawerTitle.value = chunk.filename
+
+    const chunkAsSource: SourceInfo = {
+      document_id: chunk.document_id,
+      chunk_index: chunk.chunk_index,
+      ref_id: chunk.ref_id,
+      filename: chunk.filename,
+      content: chunk.content,
+      file_type: chunk.file_type,
+      content_type: chunk.content_type,
+      timestamp_sec: chunk.timestamp_sec,
+      start_sec: chunk.start_sec,
+      end_sec: chunk.end_sec,
+    }
+    if (isVideoSource(chunkAsSource)) {
+      chunkDrawerIsVideo.value = true
+      chunkDrawerVideoUrl.value = getDocumentFileUrl(docId)
+      if (msg?.sources?.length) {
+        chunkDrawerTimePoints.value = buildVideoTimePoints(msg.sources, docId)
+      }
+      const seek = sourceSeekSec(chunkAsSource)
+      if (seek != null) {
+        chunkDrawerPendingSeek.value = seek
+      }
+    }
   } catch {
     if (!chunkDrawerContent.value) {
       ElMessage.error('无法加载文档片段')

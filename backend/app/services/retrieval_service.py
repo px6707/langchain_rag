@@ -7,13 +7,19 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from pydantic import BaseModel, Field
 
 from app.config import settings
+from app.parsing.time_metadata import extract_time_metadata
 from app.schemas import SourceInfo
 from app.schemas.retrieval import RetrievalPlan
 from app.services.llm_service import get_small_llm
 from app.services.rerank_service import get_rerank_compressor
 from app.services.retrieval_fusion import rrf_fuse
 from app.services.retrieval_validator import normalize_plan
-from app.services.vector_store_service import bm25_search, fetch_chunks_by_page, get_vector_store
+from app.services.vector_store_service import (
+    bm25_search,
+    fetch_chunks_by_asr_segment,
+    fetch_chunks_by_page,
+    get_vector_store,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +77,7 @@ def _build_sources_and_context(docs: list[Document]) -> tuple[list[SourceInfo], 
                 filename=filename,
                 content=doc.page_content[:200],
                 score=score,
+                **extract_time_metadata(doc.metadata),
             )
         )
         score_text = f" | 相关度: {score:.3f}" if score is not None else ""
@@ -227,6 +234,81 @@ def _expand_same_page_chunks(docs: list[Document]) -> list[Document]:
     return expanded
 
 
+def _asr_segment_index_from_metadata(metadata: dict) -> int | None:
+    for key in ("asr_segment_index", "segment_index"):
+        value = metadata.get(key)
+        if value is None:
+            continue
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _asr_segment_dedupe_key(doc: Document) -> tuple[str, int, int]:
+    document_id = str(doc.metadata.get("document_id", ""))
+    segment_index = _asr_segment_index_from_metadata(doc.metadata)
+    chunk_index = int(doc.metadata.get("chunk_index") or 0)
+    return (document_id, segment_index if segment_index is not None else -1, chunk_index)
+
+
+def _expand_same_asr_segment_chunks(docs: list[Document]) -> list[Document]:
+    if not docs or not settings.retrieval_asr_segment_expand_enabled:
+        return docs
+
+    segment_scores: dict[tuple[str, int], float] = {}
+    for doc in docs:
+        segment_index = _asr_segment_index_from_metadata(doc.metadata)
+        document_id = str(doc.metadata.get("document_id", ""))
+        if segment_index is None or not document_id:
+            continue
+        score = _doc_score(doc)
+        if score is None:
+            continue
+        key = (document_id, segment_index)
+        existing = segment_scores.get(key)
+        if existing is None or score > existing:
+            segment_scores[key] = score
+
+    if not segment_scores:
+        return docs
+
+    merged: dict[tuple[str, int, int], Document] = {}
+    for doc in docs:
+        merged[_asr_segment_dedupe_key(doc)] = doc
+
+    for (document_id, segment_index), trigger_score in segment_scores.items():
+        siblings = fetch_chunks_by_asr_segment(
+            document_id,
+            segment_index,
+            max_chunks=settings.retrieval_asr_segment_expand_max_chunks,
+        )
+        for sibling in siblings:
+            key = _asr_segment_dedupe_key(sibling)
+            existing = merged.get(key)
+            if existing is None:
+                sibling.metadata = {**sibling.metadata, "relevance_score": trigger_score}
+                merged[key] = sibling
+                continue
+            existing_score = _doc_score(existing)
+            if existing_score is None or trigger_score > existing_score:
+                sibling.metadata = {**existing.metadata, "relevance_score": trigger_score}
+                merged[key] = sibling
+
+    expanded = list(merged.values())
+    expanded.sort(
+        key=lambda doc: (
+            str(doc.metadata.get("document_id", "")),
+            _asr_segment_index_from_metadata(doc.metadata)
+            if _asr_segment_index_from_metadata(doc.metadata) is not None
+            else -1,
+            int(doc.metadata.get("chunk_index") or 0),
+        )
+    )
+    return expanded
+
+
 def _unique_queries(queries: list[str]) -> list[str]:
     return list(dict.fromkeys(q.strip() for q in queries if q.strip()))
 
@@ -338,6 +420,7 @@ def _run_unified_pipeline(
     fused = lists[0] if len(lists) == 1 else rrf_fuse(lists, list_weights=weights)
     docs = _dedupe_documents(fused)
     docs = _expand_same_page_chunks(docs)
+    docs = _expand_same_asr_segment_chunks(docs)
     return _apply_rerank(query, docs)
 
 

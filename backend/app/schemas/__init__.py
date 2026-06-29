@@ -67,6 +67,11 @@ class DocumentChunkResponse(BaseModel):
     ref_id: str
     filename: str
     content: str
+    file_type: str | None = None
+    content_type: str | None = None
+    timestamp_sec: float | None = None
+    start_sec: float | None = None
+    end_sec: float | None = None
 
 
 class ChatRequest(BaseModel):
@@ -117,6 +122,11 @@ class SourceInfo(BaseModel):
     filename: str
     content: str
     score: float | None = None
+    file_type: str | None = None
+    content_type: str | None = None
+    timestamp_sec: float | None = None
+    start_sec: float | None = None
+    end_sec: float | None = None
 
 
 class ClaimVerdictResponse(BaseModel):

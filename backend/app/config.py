@@ -36,7 +36,11 @@ class Settings(BaseSettings):
     parse_max_file_mb: int = 200  # 单文件上传上限（MB，对齐 MinerU 云端）
     parse_worker_poll_sec: float = 2.0  # Worker 拉取队列间隔（秒）
     parse_max_attempts: int = 3  # 解析失败最大重试次数
-    parse_job_stale_timeout_sec: int = 7200  # running 超时回收（秒），应 >= MINERU_POLL_TIMEOUT_SEC
+    parse_job_stale_timeout_sec: int = 7200  # running 超时回收（秒），应 >= MINERU_POLL_TIMEOUT_SEC；主要用于告警/日志，回收触发以 lease_expires_at 为主
+    parse_job_lease_ttl_sec: int = 120  # Worker claim 后租约有效期（秒），超时未续租可被 reclaim
+    parse_job_heartbeat_sec: int = 30  # Worker / pipeline 续租心跳间隔（秒）
+    parse_job_stale_grace_sec: int = 60  # 租约过期后再等待的宽限期（秒），过后才 reclaim stale job
+    parse_job_stale_auto_retry: bool = True  # stale 回收后是否自动新建 pending job 重新解析
     table_chunk_rows: int = 8  # 表格分块时每 chunk 数据行数
     chunking_config_path: str = "./chunking_config.yaml"
     index_delete_retry_attempts: int = 3
@@ -54,6 +58,10 @@ class Settings(BaseSettings):
     asr_model: str = "whisper-1"
     asr_use_verbose_json: bool = True
     asr_fallback_segment_sec: int = 120
+    asr_proactive_split_enabled: bool = True
+    asr_proactive_split_min_duration_sec: int = 600
+    asr_proactive_segment_sec: int = 600
+    asr_proactive_max_file_mb: int = 25
 
     # --- VLM 视觉摘要 ---
     vlm_api_base: str = ""
@@ -61,13 +69,25 @@ class Settings(BaseSettings):
     vlm_model: str = ""
 
     # --- 视频处理 ---
-    video_frame_mode: str = "scene"  # scene | interval
+    video_frame_mode: str = "scene"  # legacy; planner 主路径不再依赖
     video_scene_threshold: float = 0.3
-    video_frame_interval_sec: float = 30.0  # interval 模式抽帧间隔（秒）
-    video_max_frames: int = 60  # 最大抽帧数
+    video_frame_interval_sec: float = 30.0  # legacy
+    video_max_frames: int = 60  # legacy
+    video_frame_budget: int = 96
+    video_min_interval_sec: float = 60.0
+    video_asr_anchor_enabled: bool = True
+    video_asr_merge_gap_sec: float = 90.0
+    video_scene_gap_sec: float = 120.0
+    video_scene_extra_max: int = 24
+    video_timestamp_merge_sec: float = 3.0
+    video_vlm_enabled: bool = False
+    video_vlm_min_ocr_chars: int = 80
     video_frame_concurrency: int = 4
     video_dedupe_enabled: bool = True
     video_dedupe_hamming_threshold: int = 5
+    video_extract_batch_window_sec: float = 120.0
+    video_extract_select_margin_sec: float = 0.5
+    video_extract_ffmpeg_threads: int = 1
 
     # --- 检索与 Rerank ---
     retrieval_k: int = 4  # 遗留项；实际最终返回条数由 rerank_top_n 控制
@@ -104,6 +124,8 @@ class Settings(BaseSettings):
     retrieval_hyde_min_score: float = 0.3  # HyDE 假设文档与 query 的 embedding 相似度下限
     retrieval_page_expand_enabled: bool = True  # 粗召回后扩展同 document_id + page_number 的 sibling chunk
     retrieval_page_expand_max_chunks: int = 32  # 每页扩展最多拉取的 chunk 数
+    retrieval_asr_segment_expand_enabled: bool = True
+    retrieval_asr_segment_expand_max_chunks: int = 32
 
     # --- 对话历史压缩（SummarizationMiddleware）---
     summarization_trigger_messages: int = 30  # 消息数超过此值时触发历史摘要
