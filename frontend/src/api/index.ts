@@ -149,6 +149,9 @@ export interface ChatMessage {
   tool_calls?: ToolCallInfo[] | null
   todos?: TodoItem[] | null
   created_at: string
+  run_id?: string | null
+  trace_id?: string | null
+  feedback_submitted?: boolean
 }
 
 export interface ChatHistoryResponse {
@@ -199,6 +202,7 @@ export type ChatStreamEvent =
   | { type: 'todos_update'; todos: TodoItem[] }
   | { type: 'sources'; sources: SourceInfo[] }
   | { type: 'grounding'; grounding: GroundingResult }
+  | { type: 'trace'; run_id: string; trace_id?: string }
   | { type: 'done' }
   | { type: 'error'; message: string }
 
@@ -210,6 +214,7 @@ export interface ChatStreamHandlers {
   onTodosUpdate?: (todos: TodoItem[]) => void
   onSources?: (sources: SourceInfo[]) => void
   onGrounding?: (grounding: GroundingResult) => void
+  onTrace?: (runId: string, traceId?: string) => void
   onDone?: () => void
   onError?: (message: string) => void
 }
@@ -263,6 +268,8 @@ async function consumeChatStream(response: Response, handlers: ChatStreamHandler
         handlers.onSources?.(event.sources)
       } else if (event.type === 'grounding') {
         handlers.onGrounding?.(event.grounding)
+      } else if (event.type === 'trace') {
+        handlers.onTrace?.(event.run_id, event.trace_id)
       } else if (event.type === 'done') {
         handlers.onDone?.()
       } else if (event.type === 'error') {
@@ -311,6 +318,36 @@ export async function getChatHistory(sessionId: string): Promise<ChatHistoryResp
     params: { session_id: sessionId },
   })
   return data
+}
+
+export type FeedbackKind = 'thumbs_up' | 'thumbs_down'
+
+export type FeedbackReason =
+  | 'retrieval_wrong'
+  | 'hallucination'
+  | 'tool_error'
+  | 'too_slow'
+  | 'other'
+
+export const FEEDBACK_REASON_OPTIONS: { value: FeedbackReason; label: string }[] = [
+  { value: 'retrieval_wrong', label: '检索不准/漏检' },
+  { value: 'hallucination', label: '编造/无依据' },
+  { value: 'tool_error', label: '工具调用问题' },
+  { value: 'too_slow', label: '响应太慢' },
+  { value: 'other', label: '其他' },
+]
+
+export interface ChatFeedbackRequest {
+  run_id: string
+  trace_id?: string | null
+  kind: FeedbackKind
+  reason?: FeedbackReason | null
+  comment?: string | null
+  session_id?: string | null
+}
+
+export async function submitChatFeedback(payload: ChatFeedbackRequest): Promise<void> {
+  await api.post('/chat/feedback', payload)
 }
 
 export default api

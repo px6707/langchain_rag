@@ -1,0 +1,46 @@
+[
+  {
+    "name": "HighErrorRate",
+    "description": "Production error rate exceeds 5% over 15 minutes",
+    "type": "threshold",
+    "attribute": "error_count",
+    "aggregation": "pct",
+    "operator": "gte",
+    "threshold": 5,
+    "window_minutes": 15,
+    "filter": "and(eq(is_root, true), has(tags, \"env:prod\"))"
+  },
+  {
+    "name": "HighLatency",
+    "description": "Average rag_chat latency exceeds 30s over 15 minutes",
+    "type": "threshold",
+    "attribute": "latency",
+    "aggregation": "avg",
+    "operator": "gte",
+    "threshold": 30,
+    "window_minutes": 15,
+    "filter": "and(eq(is_root, true), has(tags, \"rag\"), eq(name, \"rag_chat\"))"
+  },
+  {
+    "name": "NegativeFeedbackSpike",
+    "description": "Average user_thumbs_down score below 0.3 over 15 minutes",
+    "type": "threshold",
+    "attribute": "feedback_score",
+    "aggregation": "avg",
+    "operator": "lte",
+    "threshold": 0.3,
+    "window_minutes": 15,
+    "filter": "eq(feedback_key, \"user_thumbs_down\")"
+  },
+  {
+    "name": "LowFaithfulness",
+    "description": "Average rag_faithfulness online eval below 0.6 over 15 minutes",
+    "type": "threshold",
+    "attribute": "feedback_score",
+    "aggregation": "avg",
+    "operator": "lte",
+    "threshold": 0.6,
+    "window_minutes": 15,
+    "filter": "eq(feedback_key, \"rag_faithfulness\")"
+  }
+]

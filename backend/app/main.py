@@ -25,7 +25,7 @@ from app import models as _models  # noqa: F401 — register ORM tables
 from app.health import build_health_payload
 from app.mcp.loader import close_mcp, get_mcp_status, init_mcp
 from app.openviking.client import close_openviking, get_openviking_status, init_openviking
-from app.routers import admin, auth, chat, documents
+from app.routers import admin, auth, chat, documents, feedback
 
 
 @asynccontextmanager
@@ -80,6 +80,7 @@ app.include_router(auth.router)
 app.include_router(admin.router)
 app.include_router(documents.router)
 app.include_router(chat.router)
+app.include_router(feedback.router)
 
 
 @app.get("/health")

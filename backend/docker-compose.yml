@@ -54,6 +54,7 @@ services:
     env_file:
       - .env
     environment:
+      APP_ENV: ${APP_ENV:-dev}
       DATABASE_URL: postgresql+asyncpg://rag:rag@postgres:5432/rag
       CHECKPOINTER_DATABASE_URL: postgresql://rag:rag@postgres:5432/rag
       ES_URL: http://elasticsearch:9200
@@ -88,6 +89,7 @@ services:
     env_file:
       - .env
     environment:
+      APP_ENV: ${APP_ENV:-dev}
       DATABASE_URL: postgresql+asyncpg://rag:rag@postgres:5432/rag
       CHECKPOINTER_DATABASE_URL: postgresql://rag:rag@postgres:5432/rag
       ES_URL: http://elasticsearch:9200

@@ -1,3 +1,6 @@
+from typing import Literal, Self
+
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -175,11 +178,15 @@ class Settings(BaseSettings):
     mcp_servers_file: str = "./mcp_servers.json"  # MCP 服务器配置文件路径
     mcp_tool_allowlist: str = ""  # MCP 工具名白名单，逗号分隔；空表示加载全部
 
+    # --- 运行环境 ---
+    app_env: Literal["dev", "prod", "test"] = "dev"  # APP_ENV；LangSmith project 默认为 rag-{app_env}
+
     # --- LangSmith 可观测性 ---
-    langsmith_tracing_enabled: bool = False  # 是否开启 LangSmith 链路追踪
+    langsmith_tracing_enabled: bool | None = None  # None = 有 API key 时自动开启
     langsmith_api_key: str = ""  # LangSmith API 密钥
-    langsmith_project: str = "langchain-rag"  # LangSmith 项目名称
+    langsmith_project: str = ""  # 空则 rag-{app_env}
     langsmith_endpoint: str = ""  # 自定义 LangSmith API 端点；空则使用官方默认
+    langsmith_metadata_max_chunks: int = 20  # turn metadata 中 chunk_refs 条数上限
 
     # --- JWT 认证 ---
     jwt_secret: str = "change-me-in-production"  # JWT 签名密钥（生产环境务必修改）
@@ -204,6 +211,18 @@ class Settings(BaseSettings):
     grounding_min_supported_ratio: float = 0.8  # 支持率低于此值标为 partial
     grounding_fail_ratio: float = 0.5  # 支持率低于此值标为 not_supported
     grounding_max_claims: int = 8  # 最多抽取 claim 数
+
+    @model_validator(mode="after")
+    def _apply_langsmith_defaults(self) -> Self:
+        if self.langsmith_tracing_enabled is None:
+            object.__setattr__(
+                self,
+                "langsmith_tracing_enabled",
+                bool(self.langsmith_api_key.strip()),
+            )
+        if not self.langsmith_project.strip():
+            object.__setattr__(self, "langsmith_project", f"rag-{self.app_env}")
+        return self
 
 
 settings = Settings()

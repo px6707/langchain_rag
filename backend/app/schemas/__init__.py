@@ -173,3 +173,11 @@ class TodoItemResponse(BaseModel):
 class ChatHistoryResponse(BaseModel):
     messages: list[ChatMessageResponse]
     todos: list[TodoItemResponse] | None = None
+
+
+from app.schemas.feedback import (
+    ChatFeedbackRequest,
+    ChatFeedbackResponse,
+    FeedbackKind,
+    FeedbackReason,
+)

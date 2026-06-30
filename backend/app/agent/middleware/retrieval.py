@@ -19,6 +19,7 @@ from langgraph.runtime import Runtime
 
 from app.services.retrieval_router import plan_retrieval
 from app.services.retrieval_service import search_with_plan
+from app.observability.turn_trace import get_turn_trace
 
 logger = logging.getLogger(__name__)
 
@@ -120,14 +121,23 @@ class RetrievalMiddleware(AgentMiddleware[AgentState[Any], None, Any]):
         cached = _turn_cache.get()
         if cached and turn_key and cached[0] == turn_key:
             sources, context, docs = cached[1], cached[2], cached[3]
+            turn_trace = get_turn_trace()
+            if turn_trace is not None:
+                turn_trace.set_chunks(docs)
         else:
             plan = await asyncio.to_thread(plan_retrieval, request.messages, llm=self._llm)
+            turn_trace = get_turn_trace()
+            if turn_trace is not None:
+                turn_trace.set_retrieval_plan(plan)
             if plan.action == "skip":
                 sources, context, docs = [], None, []
             else:
                 sources, context, docs = await asyncio.to_thread(
                     search_with_plan, plan, llm=self._llm
                 )
+
+            if turn_trace is not None:
+                turn_trace.set_chunks(docs)
 
             if turn_key:
                 _turn_cache.set((turn_key, sources, context, docs))

@@ -9,6 +9,7 @@ from langchain.agents.middleware.types import AgentMiddleware, AgentState
 
 from app.agent.middleware.retrieval import _pending_chunks, RAGAgentState
 from app.services.grounding_service import _extract_answer_text, validate_grounding
+from app.observability.turn_trace import get_turn_trace
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +36,9 @@ class GroundingMiddleware(AgentMiddleware[RAGAgentState, None, Any]):
             return None
 
         result = await asyncio.to_thread(validate_grounding, answer, chunks)
+        turn_trace = get_turn_trace()
+        if turn_trace is not None:
+            turn_trace.set_grounding(result)
         if result.status == "skipped":
             return None
 

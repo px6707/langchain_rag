@@ -18,7 +18,16 @@ from app.agent.message_utils import (
     extract_tool_starts_from_message,
 )
 from app.agent.middleware.openviking import reset_ov_request_context, set_ov_request_context
+from app.config import settings
 from app.observability.langsmith import is_langsmith_enabled
+from app.observability.langsmith_client import patch_run_metadata
+from app.observability.run_context import (
+    get_captured_run_ids,
+    init_run_capture,
+    make_root_run_capture_handler,
+    reset_run_capture,
+)
+from app.observability.turn_trace import get_turn_trace, init_turn_trace, reset_turn_trace
 from app.openviking.session_service import sync_turn_to_openviking
 from app.schemas import SourceInfo
 from app.services.retrieval_context import reset_retrieval_user_context, set_retrieval_user_context
@@ -33,12 +42,22 @@ class RAGService:
         user_id: str,
         *,
         run_name: str = "rag_chat",
+        is_admin: bool = False,
+        callbacks: list | None = None,
     ) -> RunnableConfig:
         config: RunnableConfig = {"configurable": {"thread_id": session_id}}
         if is_langsmith_enabled():
             config["run_name"] = run_name
-            config["tags"] = ["rag", run_name]
-            config["metadata"] = {"session_id": session_id, "user_id": user_id}
+            role_tag = "admin" if is_admin else "user"
+            config["tags"] = ["rag", run_name, f"env:{settings.app_env}", role_tag]
+            config["metadata"] = {
+                "session_id": session_id,
+                "user_id": user_id,
+                "is_admin": is_admin,
+                "env": settings.app_env,
+            }
+            if callbacks:
+                config["callbacks"] = callbacks
         return config
 
     @staticmethod
@@ -112,11 +131,29 @@ class RAGService:
         is_admin: bool = False,
     ) -> AsyncIterator[dict]:
         agent = get_agent()
-        config = self._agent_config(session_id, user_id, run_name=run_name)
+        run_capture = make_root_run_capture_handler()
+        config = self._agent_config(
+            session_id,
+            user_id,
+            run_name=run_name,
+            is_admin=is_admin,
+            callbacks=[run_capture] if is_langsmith_enabled() else None,
+        )
         seen_tool_ids: set[str] = set()
         ov_token = set_ov_request_context(user_id, session_id)
         retrieval_token = set_retrieval_user_context(user_id, is_admin=is_admin)
+        turn_trace_token = init_turn_trace(
+            user_id=user_id,
+            session_id=session_id,
+            is_admin=is_admin,
+            env=settings.app_env,
+        )
+        run_token_run, run_token_trace = init_run_capture()
         logger.info("agent stream start: session_id=%s user_id=%s run_name=%s", session_id, user_id, run_name)
+
+        captured_run_id: str | None = None
+        captured_trace_id: str | None = None
+        turn_metadata: dict | None = None
 
         try:
             async for msg, metadata in agent.astream(
@@ -147,8 +184,14 @@ class RAGService:
             yield {"type": "error", "message": f"RAG 服务错误: {exc}"}
             return
         finally:
+            captured_run_id, captured_trace_id = get_captured_run_ids()
+            turn_trace = get_turn_trace()
+            if turn_trace is not None:
+                turn_metadata = turn_trace.to_metadata()
             reset_retrieval_user_context(retrieval_token)
             reset_ov_request_context(ov_token)
+            reset_turn_trace(turn_trace_token)
+            reset_run_capture(run_token_run, run_token_trace)
 
         state = await agent.aget_state(config)
         hitl_request = extract_hitl_request(state)
@@ -188,6 +231,16 @@ class RAGService:
                 user_message=user_message,
                 assistant_message=assistant_message,
             )
+
+        run_id, trace_id = captured_run_id, captured_trace_id
+        if is_langsmith_enabled() and run_id and turn_metadata:
+            patch_run_metadata(run_id, turn_metadata)
+        if run_id:
+            yield {
+                "type": "trace",
+                "run_id": run_id,
+                "trace_id": trace_id or run_id,
+            }
 
         yield {"type": "done"}
 

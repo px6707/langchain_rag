@@ -156,6 +156,29 @@
                 </div>
               </div>
             </div>
+
+            <div
+              v-if="msg.role === 'assistant' && msg.run_id && !msg.feedback_submitted"
+              class="mt-2 flex justify-end gap-1"
+            >
+              <el-button
+                size="small"
+                text
+                type="success"
+                :loading="feedbackSubmittingId === msg.id"
+                @click="submitPositiveFeedback(msg)"
+              >
+                👍 有帮助
+              </el-button>
+              <el-button
+                size="small"
+                text
+                type="danger"
+                @click="openNegativeFeedbackDialog(msg)"
+              >
+                👎 不准确
+              </el-button>
+            </div>
           </div>
         </div>
 
@@ -302,6 +325,41 @@
         <p class="whitespace-pre-wrap text-gray-800">{{ chunkDrawerContent }}</p>
       </div>
     </el-drawer>
+
+    <el-dialog
+      v-model="feedbackDialogVisible"
+      title="反馈：回答不准确"
+      width="420px"
+      :close-on-click-modal="false"
+      @closed="resetFeedbackDialog"
+    >
+      <el-form label-position="top">
+        <el-form-item label="原因" required>
+          <el-select v-model="feedbackReason" placeholder="请选择原因" class="w-full">
+            <el-option
+              v-for="opt in FEEDBACK_REASON_OPTIONS"
+              :key="opt.value"
+              :label="opt.label"
+              :value="opt.value"
+            />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="补充说明（可选）">
+          <el-input v-model="feedbackComment" type="textarea" :rows="3" maxlength="500" show-word-limit />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="feedbackDialogVisible = false">取消</el-button>
+        <el-button
+          type="danger"
+          :loading="feedbackSubmittingId !== null"
+          :disabled="!feedbackReason"
+          @click="confirmNegativeFeedback"
+        >
+          提交反馈
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -318,7 +376,10 @@ import {
   getPendingInterrupt,
   resumeChatStream,
   sendChatStream,
+  submitChatFeedback,
+  FEEDBACK_REASON_OPTIONS,
   type ChatMessage,
+  type FeedbackReason,
   type ChatStreamHandlers,
   type GroundingResult,
   type HITLDecision,
@@ -341,6 +402,11 @@ const messagesRef = ref<HTMLElement>()
 const hitlDialogVisible = ref(false)
 const pendingHitlRequest = ref<HITLRequest | null>(null)
 const hitlSubmitting = ref(false)
+const feedbackSubmittingId = ref<string | null>(null)
+const feedbackDialogVisible = ref(false)
+const feedbackTargetMsg = ref<ChatMessage | null>(null)
+const feedbackReason = ref<FeedbackReason | null>(null)
+const feedbackComment = ref('')
 const emailForm = ref<SendEmailArgs>({
   to_email: '',
   subject: '',
@@ -645,6 +711,69 @@ function createStreamHandlers(assistantId: string): ChatStreamHandlers {
         msg.grounding = grounding
       }
     },
+    onTrace: (runId, traceId) => {
+      const msg = messages.value.find((m) => m.id === assistantId)
+      if (msg) {
+        msg.run_id = runId
+        msg.trace_id = traceId ?? runId
+      }
+    },
+  }
+}
+
+async function submitFeedback(
+  msg: ChatMessage,
+  kind: 'thumbs_up' | 'thumbs_down',
+  reason?: FeedbackReason | null,
+  comment?: string | null,
+) {
+  if (!msg.run_id || msg.feedback_submitted) return
+  feedbackSubmittingId.value = msg.id
+  try {
+    await submitChatFeedback({
+      run_id: msg.run_id,
+      trace_id: msg.trace_id ?? msg.run_id,
+      kind,
+      reason: reason ?? undefined,
+      comment: comment ?? undefined,
+      session_id: sessionId,
+    })
+    msg.feedback_submitted = true
+    ElMessage.success('已记录反馈，感谢！')
+  } catch (err: unknown) {
+    const detail =
+      err && typeof err === 'object' && 'response' in err
+        ? (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
+        : undefined
+    ElMessage.error(typeof detail === 'string' ? detail : '提交反馈失败')
+  } finally {
+    feedbackSubmittingId.value = null
+  }
+}
+
+async function submitPositiveFeedback(msg: ChatMessage) {
+  await submitFeedback(msg, 'thumbs_up')
+}
+
+function openNegativeFeedbackDialog(msg: ChatMessage) {
+  feedbackTargetMsg.value = msg
+  feedbackReason.value = null
+  feedbackComment.value = ''
+  feedbackDialogVisible.value = true
+}
+
+function resetFeedbackDialog() {
+  feedbackTargetMsg.value = null
+  feedbackReason.value = null
+  feedbackComment.value = ''
+}
+
+async function confirmNegativeFeedback() {
+  const msg = feedbackTargetMsg.value
+  if (!msg || !feedbackReason.value) return
+  await submitFeedback(msg, 'thumbs_down', feedbackReason.value, feedbackComment.value || null)
+  if (msg.feedback_submitted) {
+    feedbackDialogVisible.value = false
   }
 }
 

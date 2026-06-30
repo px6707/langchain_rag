@@ -16,10 +16,16 @@ def configure_langsmith() -> bool:
         return True
 
     if not settings.langsmith_tracing_enabled:
+        if settings.langsmith_api_key:
+            logger.info(
+                "LangSmith tracing disabled (LANGSMITH_TRACING_ENABLED=false); app_env=%s project=%s",
+                settings.app_env,
+                settings.langsmith_project,
+            )
         return False
 
     if not settings.langsmith_api_key:
-        logger.warning("LANGSMITH_TRACING_ENABLED=true but LANGSMITH_API_KEY is empty; tracing disabled.")
+        logger.warning("LangSmith tracing requested but LANGSMITH_API_KEY is empty; tracing disabled.")
         return False
 
     os.environ["LANGSMITH_TRACING"] = "true"
@@ -34,7 +40,11 @@ def configure_langsmith() -> bool:
         os.environ["LANGCHAIN_ENDPOINT"] = settings.langsmith_endpoint
 
     _enabled = True
-    logger.info("LangSmith tracing enabled for project: %s", settings.langsmith_project)
+    logger.info(
+        "LangSmith tracing enabled: project=%s app_env=%s",
+        settings.langsmith_project,
+        settings.app_env,
+    )
     return True
 
 

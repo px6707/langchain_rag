@@ -107,6 +107,10 @@ cd backend && alembic stamp head
 
 详见 [`backend/PARSING.md`](backend/PARSING.md) 中的部署说明。
 
+## 可观测性（LangSmith）
+
+配置 `LANGSMITH_API_KEY` 后自动开启 tracing，project 默认为 `rag-{APP_ENV}`（如 `rag-dev` / `rag-prod`）。支持 turn 级 RAG metadata、结构化用户反馈（👍/👎 + 原因）、Online Eval 与告警配置，详见 [`backend/OBSERVABILITY.md`](backend/OBSERVABILITY.md)（含 Phase A 运维清单）。
+
 ## 架构说明
 
 - **Agent**: LangChain `create_agent` + `AsyncPostgresSaver` 持久化多轮对话
