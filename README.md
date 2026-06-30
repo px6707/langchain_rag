@@ -109,7 +109,7 @@ cd backend && alembic stamp head
 
 ## 可观测性（LangSmith）
 
-配置 `LANGSMITH_API_KEY` 后自动开启 tracing，project 默认为 `rag-{APP_ENV}`（如 `rag-dev` / `rag-prod`）。支持 turn 级 RAG metadata、结构化用户反馈（👍/👎 + 原因）、Online Eval 与告警配置，详见 [`backend/OBSERVABILITY.md`](backend/OBSERVABILITY.md)（含 Phase A 运维清单）。
+配置 `LANGSMITH_API_KEY` 后自动开启 tracing，project 默认为 `rag-{APP_ENV}`。支持 turn 级 metadata、命名决策链 span、结构化反馈、chunk_snippets 与 history 持久化 `run_id`，详见 [`backend/OBSERVABILITY.md`](backend/OBSERVABILITY.md)。
 
 ## 架构说明
 

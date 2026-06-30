@@ -205,6 +205,7 @@ def convert_messages_to_history(
     messages: list[AnyMessage],
     message_sources: dict[str, list[dict]] | None = None,
     message_grounding: dict[str, dict] | None = None,
+    message_traces: dict[str, dict] | None = None,
 ) -> list[dict]:
     history: list[dict] = []
     turn_messages: list[AnyMessage] = []
@@ -257,6 +258,14 @@ def convert_messages_to_history(
             "grounding": grounding,
             "tool_calls": tool_calls or None,
             "created_at": datetime.now(timezone.utc),
+            **(
+                {
+                    "run_id": message_traces[assistant_id]["run_id"],
+                    "trace_id": message_traces[assistant_id].get("trace_id"),
+                }
+                if message_traces and assistant_id in message_traces
+                else {}
+            ),
         })
         turn_messages = []
 

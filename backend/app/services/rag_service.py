@@ -21,6 +21,7 @@ from app.agent.middleware.openviking import reset_ov_request_context, set_ov_req
 from app.config import settings
 from app.observability.langsmith import is_langsmith_enabled
 from app.observability.langsmith_client import patch_run_metadata
+from app.observability.log_context import init_log_context, reset_log_context, update_log_trace_id
 from app.observability.run_context import (
     get_captured_run_ids,
     init_run_capture,
@@ -36,6 +37,94 @@ logger = logging.getLogger(__name__)
 
 
 class RAGService:
+    @staticmethod
+    def _last_assistant_message_id(messages: list) -> str | None:
+        for msg in reversed(messages):
+            if isinstance(msg, AIMessage) and msg.id:
+                return msg.id
+        return None
+
+    @staticmethod
+    def _format_hitl_decisions(decisions: list[dict]) -> list[dict]:
+        formatted: list[dict] = []
+        for decision in decisions:
+            entry: dict = {"decision": decision.get("type", "unknown")}
+            edited = decision.get("edited_action")
+            if isinstance(edited, dict) and edited.get("name"):
+                entry["tool_name"] = edited["name"]
+            if decision.get("message"):
+                entry["message"] = decision["message"]
+            formatted.append(entry)
+        return formatted
+
+    async def _persist_message_trace(
+        self,
+        agent,
+        config: RunnableConfig,
+        *,
+        run_id: str,
+        trace_id: str | None,
+    ) -> None:
+        state = await agent.aget_state(config)
+        if not state or not state.values:
+            return
+        assistant_id = self._last_assistant_message_id(state.values.get("messages", []))
+        if not assistant_id:
+            return
+        effective_trace = trace_id or run_id
+        await agent.aupdate_state(
+            config,
+            {
+                "message_traces": {
+                    assistant_id: {"run_id": run_id, "trace_id": effective_trace},
+                }
+            },
+        )
+
+    async def _emit_trace_metadata(
+        self,
+        agent,
+        config: RunnableConfig,
+        *,
+        run_id: str | None,
+        trace_id: str | None,
+        turn_metadata: dict | None,
+    ) -> dict | None:
+        if not run_id:
+            return None
+        if is_langsmith_enabled() and turn_metadata:
+            patch_run_metadata(run_id, turn_metadata)
+        await self._persist_message_trace(agent, config, run_id=run_id, trace_id=trace_id)
+        effective_trace = trace_id or run_id
+        update_log_trace_id(effective_trace)
+        return {
+            "type": "trace",
+            "run_id": run_id,
+            "trace_id": effective_trace,
+        }
+
+    def _record_tool_event(self, event: dict) -> None:
+        turn_trace = get_turn_trace()
+        if turn_trace is None:
+            return
+        event_type = event.get("type")
+        if event_type == "tool_start":
+            turn_trace.record_tool_start(
+                str(event.get("id", "")),
+                str(event.get("name", "unknown")),
+                event.get("args") if isinstance(event.get("args"), str) else None,
+            )
+        elif event_type == "tool_end":
+            output = event.get("output")
+            output_str = output if isinstance(output, str) else str(output) if output is not None else None
+            is_error = bool(output_str and ("error" in output_str.lower() or "exception" in output_str.lower()))
+            turn_trace.record_tool_end(
+                str(event.get("id", "")),
+                str(event.get("name", "unknown")),
+                output=output_str,
+                is_error=is_error,
+            )
+
     def _agent_config(
         self,
         session_id: str,
@@ -129,6 +218,7 @@ class RAGService:
         run_name: str = "rag_chat",
         user_message: str | None = None,
         is_admin: bool = False,
+        hitl_decisions: list[dict] | None = None,
     ) -> AsyncIterator[dict]:
         agent = get_agent()
         run_capture = make_root_run_capture_handler()
@@ -148,6 +238,11 @@ class RAGService:
             is_admin=is_admin,
             env=settings.app_env,
         )
+        if hitl_decisions:
+            turn_trace = get_turn_trace()
+            if turn_trace is not None:
+                turn_trace.set_hitl_decisions(hitl_decisions)
+        log_tokens = init_log_context(session_id=session_id, user_id=user_id)
         run_token_run, run_token_trace = init_run_capture()
         logger.info("agent stream start: session_id=%s user_id=%s run_name=%s", session_id, user_id, run_name)
 
@@ -164,6 +259,7 @@ class RAGService:
                 if not isinstance(metadata, dict):
                     continue
                 for event in self._events_from_message(msg, metadata, seen_tool_ids):
+                    self._record_tool_event(event)
                     yield event
                     if event.get("type") == "tool_end" and event.get("name") == "write_todos":
                         state = await agent.aget_state(config)
@@ -192,6 +288,7 @@ class RAGService:
             reset_ov_request_context(ov_token)
             reset_turn_trace(turn_trace_token)
             reset_run_capture(run_token_run, run_token_trace)
+            reset_log_context(*log_tokens)
 
         state = await agent.aget_state(config)
         hitl_request = extract_hitl_request(state)
@@ -202,6 +299,15 @@ class RAGService:
                     session_id,
                     user_message=user_message,
                 )
+            trace_event = await self._emit_trace_metadata(
+                agent,
+                config,
+                run_id=captured_run_id,
+                trace_id=captured_trace_id,
+                turn_metadata=turn_metadata,
+            )
+            if trace_event:
+                yield trace_event
             yield {"type": "hitl_request", "request": hitl_request}
             return
 
@@ -233,14 +339,15 @@ class RAGService:
             )
 
         run_id, trace_id = captured_run_id, captured_trace_id
-        if is_langsmith_enabled() and run_id and turn_metadata:
-            patch_run_metadata(run_id, turn_metadata)
-        if run_id:
-            yield {
-                "type": "trace",
-                "run_id": run_id,
-                "trace_id": trace_id or run_id,
-            }
+        trace_event = await self._emit_trace_metadata(
+            agent,
+            config,
+            run_id=run_id,
+            trace_id=trace_id,
+            turn_metadata=turn_metadata,
+        )
+        if trace_event:
+            yield trace_event
 
         yield {"type": "done"}
 
@@ -275,6 +382,7 @@ class RAGService:
             Command(resume={"decisions": decisions}),
             run_name="rag_resume",
             is_admin=is_admin,
+            hitl_decisions=self._format_hitl_decisions(decisions),
         ):
             yield event
 
@@ -305,6 +413,12 @@ class RAGService:
         messages = state.values.get("messages", [])
         message_sources = state.values.get("message_sources", {})
         message_grounding = state.values.get("message_grounding", {})
-        history = convert_messages_to_history(messages, message_sources, message_grounding)
+        message_traces = state.values.get("message_traces", {})
+        history = convert_messages_to_history(
+            messages,
+            message_sources,
+            message_grounding,
+            message_traces,
+        )
         todos = self._extract_todos(state)
         return history, todos

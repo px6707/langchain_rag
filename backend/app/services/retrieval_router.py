@@ -5,6 +5,7 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 
 from app.config import settings
+from app.observability.stage_trace import trace_stage
 from app.schemas.retrieval import QueryRewrite, RetrievalPlan, StrategyPlan
 from app.services.llm_service import get_small_llm
 from app.services.retrieval_rules import rule_postcheck_retrieve, rule_precheck
@@ -328,6 +329,7 @@ def _fallback_plan(query: str, *, reason: str) -> RetrievalPlan:
     )
 
 
+@trace_stage("rag_retrieval_router")
 def plan_retrieval(
     messages: list,
     *,

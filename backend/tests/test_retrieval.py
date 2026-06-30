@@ -8,6 +8,7 @@ from app.config import settings
 from app.schemas.retrieval import RetrievalPlan
 from app.services.rerank_service import HttpRerankCompressor, get_rerank_compressor
 from app.services.retrieval_service import (
+    _PipelineStats,
     _build_sources_and_context,
     _dedupe_documents,
     _filter_by_threshold,
@@ -82,7 +83,7 @@ def test_none_strategy_applies_rerank():
         patch("app.services.retrieval_service.get_rerank_compressor", return_value=mock_compressor),
         patch.object(settings, "retrieval_hybrid_enabled", False),
     ):
-        docs = _run_unified_pipeline(plan, use_hybrid=False)
+        docs, _stats = _run_unified_pipeline(plan, use_hybrid=False)
 
     mock_compressor.compress_documents.assert_called_once()
     assert docs[0].metadata["rerank_score"] == pytest.approx(0.9)
@@ -108,7 +109,7 @@ def test_decompose_includes_standalone_and_subqueries():
         patch("app.services.retrieval_service.get_rerank_compressor", return_value=None),
         patch.object(settings, "retrieval_hybrid_enabled", False),
     ):
-        docs = _run_unified_pipeline(plan, use_hybrid=False)
+        docs, _stats = _run_unified_pipeline(plan, use_hybrid=False)
 
     assert mock_retriever.invoke.call_count == 2
     assert len(docs) == 2
@@ -135,7 +136,7 @@ def test_hyde_uses_bm25_channel():
         patch("app.services.retrieval_service.get_rerank_compressor", return_value=None),
         patch.object(settings, "retrieval_hybrid_enabled", True),
     ):
-        docs = _run_unified_pipeline(plan, use_hybrid=True)
+        docs, _stats = _run_unified_pipeline(plan, use_hybrid=True)
 
     mock_bm25.assert_called_once()
     assert len(docs) == 3
@@ -143,20 +144,39 @@ def test_hyde_uses_bm25_channel():
 
 def test_tiered_search_escalates_tiers():
     plan = RetrievalPlan(action="retrieve", strategy="none", standalone_query="q")
-    empty_doc_list: list[Document] = []
     good_doc = [Document("hit", metadata={"filename": "a.pdf", "rerank_score": 0.9})]
 
+    empty_stats = _PipelineStats(
+        queries=["q"],
+        hits_before_rerank=0,
+        hits_after_rerank=0,
+        page_expand_added=0,
+        asr_expand_added=0,
+    )
+    good_stats = _PipelineStats(
+        queries=["q"],
+        hits_before_rerank=1,
+        hits_after_rerank=1,
+        page_expand_added=0,
+        asr_expand_added=0,
+    )
+
     with (
-        patch("app.services.retrieval_service._run_unified_pipeline", side_effect=[empty_doc_list, good_doc]),
+        patch(
+            "app.services.retrieval_service._run_unified_pipeline",
+            side_effect=[([], empty_stats), (good_doc, good_stats)],
+        ),
         patch("app.services.retrieval_service._fallback_extra_queries", return_value=["alt"]),
         patch.object(settings, "retrieval_empty_fallback_enabled", True),
         patch.object(settings, "retrieval_fallback_max_tiers", 2),
         patch.object(settings, "retrieval_score_threshold", 0.7),
         patch.object(settings, "retrieval_fallback_threshold_ratio", 0.5),
     ):
-        docs = _tiered_search(plan, llm=MagicMock())
+        docs, tier, stats = _tiered_search(plan, llm=MagicMock())
 
     assert len(docs) == 1
+    assert tier == 1
+    assert stats is good_stats
 
 
 def test_hybrid_strategy_config():

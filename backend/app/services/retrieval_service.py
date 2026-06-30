@@ -7,6 +7,8 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from pydantic import BaseModel, Field
 
 from app.config import settings
+from app.observability.retrieval_trace import RetrievalTrace
+from app.observability.stage_trace import trace_stage
 from app.parsing.time_metadata import extract_time_metadata
 from app.schemas import SourceInfo
 from app.schemas.retrieval import RetrievalPlan
@@ -37,6 +39,15 @@ class _TierConfig:
     threshold: float
     use_hybrid: bool
     k_multiplier: float
+
+
+@dataclass
+class _PipelineStats:
+    queries: list[str]
+    hits_before_rerank: int
+    hits_after_rerank: int
+    page_expand_added: int
+    asr_expand_added: int
 
 
 def _doc_score(doc: Document) -> float | None:
@@ -146,6 +157,7 @@ def _retrieve_with_hybrid_fallback(
     return _retrieve_raw(query, use_hybrid=False, k=k)
 
 
+@trace_stage("rag_rerank")
 def _apply_rerank(query: str, docs: list[Document]) -> list[Document]:
     if not docs:
         return docs
@@ -188,6 +200,7 @@ def _chunk_dedupe_key(doc: Document) -> tuple[str, int, int]:
     return (document_id, page_number if page_number is not None else -1, int(chunk_index or 0))
 
 
+@trace_stage("rag_page_expand")
 def _expand_same_page_chunks(docs: list[Document]) -> list[Document]:
     if not docs or not settings.retrieval_page_expand_enabled:
         return docs
@@ -261,6 +274,7 @@ def _asr_segment_dedupe_key(doc: Document) -> tuple[str, int, int]:
     return (document_id, segment_index if segment_index is not None else -1, chunk_index)
 
 
+@trace_stage("rag_asr_expand")
 def _expand_same_asr_segment_chunks(docs: list[Document]) -> list[Document]:
     if not docs or not settings.retrieval_asr_segment_expand_enabled:
         return docs
@@ -411,25 +425,60 @@ def _collect_lists(
     return lists, [settings.retrieval_rrf_parent_weight]
 
 
+def _queries_from_plan(plan: RetrievalPlan) -> list[str]:
+    query = plan.standalone_query.strip()
+    if not query:
+        return []
+    if plan.strategy in ("multi_query", "decompose"):
+        return _unique_queries([query, *plan.extra_queries])
+    return [query]
+
+
 def _run_unified_pipeline(
     plan: RetrievalPlan,
     *,
     use_hybrid: bool,
     k_multiplier: float = 1.0,
-) -> list[Document]:
+) -> tuple[list[Document], _PipelineStats]:
     query = plan.standalone_query.strip()
+    queries = _queries_from_plan(plan)
+    empty_stats = _PipelineStats(
+        queries=queries,
+        hits_before_rerank=0,
+        hits_after_rerank=0,
+        page_expand_added=0,
+        asr_expand_added=0,
+    )
     if not query:
-        return []
+        return [], empty_stats
 
     lists, weights = _collect_lists(plan, use_hybrid=use_hybrid, k_multiplier=k_multiplier)
     if not lists:
-        return []
+        return [], empty_stats
 
     fused = lists[0] if len(lists) == 1 else rrf_fuse(lists, list_weights=weights)
     docs = _dedupe_documents(fused)
+
+    before_page = len(docs)
     docs = _expand_same_page_chunks(docs)
+    page_expand_added = max(0, len(docs) - before_page)
+
+    before_asr = len(docs)
     docs = _expand_same_asr_segment_chunks(docs)
-    return _apply_rerank(query, docs)
+    asr_expand_added = max(0, len(docs) - before_asr)
+
+    hits_before_rerank = len(docs)
+    docs = _apply_rerank(query, docs)
+    hits_after_rerank = len(docs)
+
+    stats = _PipelineStats(
+        queries=queries,
+        hits_before_rerank=hits_before_rerank,
+        hits_after_rerank=hits_after_rerank,
+        page_expand_added=page_expand_added,
+        asr_expand_added=asr_expand_added,
+    )
+    return docs, stats
 
 
 def _fallback_extra_queries(plan: RetrievalPlan, *, llm: BaseChatModel | None = None) -> list[str]:
@@ -482,14 +531,18 @@ def _build_tier_configs(plan: RetrievalPlan, *, llm: BaseChatModel | None) -> li
     ]
 
 
-def _tiered_search(plan: RetrievalPlan, *, llm: BaseChatModel | None) -> list[Document]:
+def _tiered_search(
+    plan: RetrievalPlan,
+    *,
+    llm: BaseChatModel | None,
+) -> tuple[list[Document], int | None, _PipelineStats | None]:
     if not settings.retrieval_empty_fallback_enabled:
-        docs = _run_unified_pipeline(plan, use_hybrid=settings.retrieval_hybrid_enabled)
-        return _filter_by_threshold(docs)
+        docs, stats = _run_unified_pipeline(plan, use_hybrid=settings.retrieval_hybrid_enabled)
+        return _filter_by_threshold(docs), 0, stats
 
     tiers = _build_tier_configs(plan, llm=llm)[: settings.retrieval_fallback_max_tiers]
     for idx, tier in enumerate(tiers):
-        docs = _run_unified_pipeline(
+        docs, stats = _run_unified_pipeline(
             tier.plan,
             use_hybrid=tier.use_hybrid,
             k_multiplier=tier.k_multiplier,
@@ -498,28 +551,43 @@ def _tiered_search(plan: RetrievalPlan, *, llm: BaseChatModel | None) -> list[Do
         if filtered:
             if idx > 0:
                 logger.info("Tiered fallback succeeded at tier %s", idx)
-            return filtered
+            return filtered, idx, stats
 
-    return []
+    return [], None, None
 
 
+@trace_stage("rag_es_search")
 def search_with_plan(
     plan: RetrievalPlan,
     *,
     llm: BaseChatModel | None = None,
-) -> tuple[list[SourceInfo], str | None, list[Document]]:
+) -> tuple[list[SourceInfo], str | None, list[Document], RetrievalTrace | None]:
     if plan.action == "skip" or not plan.standalone_query.strip():
-        return [], None, []
+        return [], None, [], None
 
     plan = normalize_plan(plan)
-    docs = _tiered_search(plan, llm=llm)
+    docs, tier, stats = _tiered_search(plan, llm=llm)
     sources, context = _build_sources_and_context(docs)
-    return sources, context, docs
+
+    retrieval_trace: RetrievalTrace | None = None
+    if stats is not None:
+        retrieval_trace = RetrievalTrace(
+            queries=stats.queries,
+            tier=tier,
+            hits_before_rerank=stats.hits_before_rerank,
+            hits_after_rerank=stats.hits_after_rerank,
+            page_expand_added=stats.page_expand_added,
+            asr_expand_added=stats.asr_expand_added,
+        )
+
+    return sources, context, docs, retrieval_trace
 
 
-def search_relevant_docs(query: str) -> tuple[list[SourceInfo], str | None, list[Document]]:
+def search_relevant_docs(
+    query: str,
+) -> tuple[list[SourceInfo], str | None, list[Document], RetrievalTrace | None]:
     if not query.strip():
-        return [], None, []
+        return [], None, [], None
 
     plan = RetrievalPlan(
         action="retrieve",

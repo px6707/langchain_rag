@@ -163,6 +163,8 @@ class ChatMessageResponse(BaseModel):
     grounding: GroundingResultResponse | None = None
     tool_calls: list[ToolCallInfo] | None = None
     created_at: datetime | None = None
+    run_id: str | None = None
+    trace_id: str | None = None
 
 
 class TodoItemResponse(BaseModel):

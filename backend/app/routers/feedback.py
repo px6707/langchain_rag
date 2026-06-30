@@ -54,10 +54,11 @@ async def submit_chat_feedback(
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     logger.info(
-        "chat feedback submitted: user_id=%s kind=%s reason=%s run_id=%s",
+        "chat feedback submitted: user_id=%s kind=%s reason=%s run_id=%s trace_id=%s",
         user_id,
         request.kind,
         request.reason,
         request.run_id,
+        request.trace_id,
     )
     return ChatFeedbackResponse(ok=True)

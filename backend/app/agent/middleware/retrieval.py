@@ -54,6 +54,12 @@ def _merge_grounding(left: dict[str, dict] | None, right: dict[str, dict] | None
     return merged
 
 
+def _merge_message_traces(left: dict[str, dict] | None, right: dict[str, dict] | None) -> dict[str, dict]:
+    merged = dict(left or {})
+    merged.update(right or {})
+    return merged
+
+
 class TodoItem(TypedDict):
     content: str
     status: Literal["pending", "in_progress", "completed"]
@@ -62,6 +68,7 @@ class TodoItem(TypedDict):
 class RAGAgentState(AgentState):
     message_sources: NotRequired[Annotated[dict[str, list[dict]], _merge_sources]]
     message_grounding: NotRequired[Annotated[dict[str, dict], _merge_grounding]]
+    message_traces: NotRequired[Annotated[dict[str, dict], _merge_message_traces]]
     todos: Annotated[NotRequired[list[TodoItem]], OmitFromInput]
 
 
@@ -132,9 +139,11 @@ class RetrievalMiddleware(AgentMiddleware[AgentState[Any], None, Any]):
             if plan.action == "skip":
                 sources, context, docs = [], None, []
             else:
-                sources, context, docs = await asyncio.to_thread(
+                sources, context, docs, retrieval_trace = await asyncio.to_thread(
                     search_with_plan, plan, llm=self._llm
                 )
+                if turn_trace is not None:
+                    turn_trace.set_retrieval_trace(retrieval_trace)
 
             if turn_trace is not None:
                 turn_trace.set_chunks(docs)

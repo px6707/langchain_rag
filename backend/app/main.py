@@ -3,13 +3,19 @@ import logging
 import time
 
 from app.observability.langsmith import configure_langsmith, is_langsmith_enabled
+from app.observability.log_context import TraceContextFilter
 
 configure_langsmith()
 
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+    format=(
+        "%(asctime)s %(levelname)s [%(name)s] "
+        "trace_id=%(trace_id)s session_id=%(session_id)s user_id=%(user_id)s "
+        "%(message)s"
+    ),
 )
+logging.getLogger().addFilter(TraceContextFilter())
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware

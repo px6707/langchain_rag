@@ -125,6 +125,8 @@ async def get_history(
             grounding=msg.get("grounding"),
             tool_calls=msg.get("tool_calls"),
             created_at=msg.get("created_at"),
+            run_id=msg.get("run_id"),
+            trace_id=msg.get("trace_id"),
         )
         for msg in messages
     ]

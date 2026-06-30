@@ -187,6 +187,8 @@ class Settings(BaseSettings):
     langsmith_project: str = ""  # 空则 rag-{app_env}
     langsmith_endpoint: str = ""  # 自定义 LangSmith API 端点；空则使用官方默认
     langsmith_metadata_max_chunks: int = 20  # turn metadata 中 chunk_refs 条数上限
+    langsmith_metadata_snippet_chars: int = 300  # chunk_snippets 单条最大字符
+    langsmith_stage_tracing_enabled: bool = True  # Phase B 命名 span；关闭则 stage no-op
 
     # --- JWT 认证 ---
     jwt_secret: str = "change-me-in-production"  # JWT 签名密钥（生产环境务必修改）

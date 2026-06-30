@@ -5,6 +5,7 @@ from langchain_core.documents import Document
 from pydantic import BaseModel, Field
 
 from app.config import settings
+from app.observability.stage_trace import trace_stage
 from app.services.llm_service import get_small_llm
 from app.services.retrieval_service import _doc_ref_id
 
@@ -61,6 +62,7 @@ def _map_status(supported_ratio: float) -> Literal["supported", "partial", "not_
     return "not_supported"
 
 
+@trace_stage("rag_grounding_judge")
 def validate_grounding(answer: str, chunks: list[Document]) -> GroundingResult:
     if not settings.grounding_enabled:
         return GroundingResult(status="skipped", supported_ratio=0.0, claims=[])
